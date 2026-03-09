@@ -1,0 +1,19 @@
+{
+  "model_path": "models/whisper/ggml-large-v3-turbo.bin",
+  "use_gpu": true,
+  "cuda_path": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.x/bin",
+  "language": "ru",
+  "audio_dir": "audio",
+  "sample_rate": 16000,
+  "max_chunk_duration_sec": 10,
+  "min_chunk_duration_sec": 2,
+  "vad_silence_sec": 1.0,
+  "overlap_sec": 2.5,
+  "gigaam_model_dir": "models/gigaam-v3-ctc-ru",
+  "ensemble_enabled": true,
+  "llm_correction_enabled": false,
+  "ollama_url": "http://localhost:11434",
+  "llm_model": "qwen2.5:7b-instruct",
+  "session_ttl_hours": 24,
+  "audio_dir_max_mb": 1024
+}

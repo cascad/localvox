@@ -1,0 +1,37 @@
+# Build
+/target/
+
+# Config (user-specific paths)
+server-reliable/settings.json
+client-config.json
+.env
+
+# Models (downloaded separately)
+models/
+
+# Audio buffer
+audio/
+
+# Python
+venv/
+tools/venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+
+# Benchmark results
+tools/sova_results.json
+*.json.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

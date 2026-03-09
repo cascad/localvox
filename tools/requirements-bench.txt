@@ -1,0 +1,10 @@
+# Зависимости для tools/bench_sova.py
+websockets>=12.0
+jiwer>=3.0
+
+# Опционально для HuggingFace датасета
+# datasets>=2.0
+
+# Опционально для WAV (если не хватает stdlib wave)
+# soundfile
+# scipy

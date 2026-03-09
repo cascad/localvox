@@ -1,0 +1,6 @@
+{
+  "server": "ws://localhost:9745",
+  "device": "0",
+  "loopback": "Razer",
+  "output": "transcript.txt"
+}

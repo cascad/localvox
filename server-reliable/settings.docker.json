@@ -1,0 +1,18 @@
+{
+  "model_path": "/models/whisper/ggml-large-v3-turbo.bin",
+  "use_gpu": true,
+  "language": "ru",
+  "audio_dir": "/app/audio",
+  "sample_rate": 16000,
+  "max_chunk_duration_sec": 10,
+  "min_chunk_duration_sec": 2,
+  "vad_silence_sec": 1.0,
+  "overlap_sec": 2.5,
+  "gigaam_model_dir": "/models/gigaam",
+  "ensemble_enabled": true,
+  "llm_correction_enabled": true,
+  "ollama_url": "http://host.docker.internal:11434",
+  "llm_model": "qwen2.5:7b-instruct",
+  "session_ttl_hours": 24,
+  "audio_dir_max_mb": 4096
+}

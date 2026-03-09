@@ -1,0 +1,26 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Python / tools (не нужны для сборки сервера)
+tools/venv/
+tools/*.py
+*.pyc
+
+# Config and data
+server-reliable/settings.json
+client-config.json
+audio/
+models/
+
+# Docs
+*.md
+!README.md

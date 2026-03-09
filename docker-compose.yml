@@ -1,0 +1,29 @@
+# LocalVox — WebSocket-сервер транскрипции (Rust + Whisper + GigaAM)
+# Модели и GPU прокидываются с хоста.
+
+services:
+  live-transcribe-server:
+    build: .
+    image: localvox-server
+    container_name: localvox-server
+    ports:
+      - "9745:9745"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Whisper GGML (.bin)
+      - "${WHISPER_MODELS_HOST:-./models/whisper}:/models/whisper:ro"
+      # GigaAM (папка с model.int8.onnx и tokens.txt)
+      - "${GIGAAM_MODELS_HOST:-./models/gigaam-v3-ctc-ru}:/models/gigaam:ro"
+      # Буфер аудио (read-write)
+      - "localvox-audio:/app/audio"
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+
+volumes:
+  localvox-audio:
