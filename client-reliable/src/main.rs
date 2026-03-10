@@ -1,3 +1,4 @@
+#[cfg(windows)]
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -144,32 +145,83 @@ fn get_config_save_path() -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Реальные микрофоны (без cpal loopback aggregate на macOS).
+/// cpal создаёт aggregate "Cpal loopback record aggregate device" для loopback — он имеет input,
+/// но это не микрофон, его нужно исключить из списка.
+fn collect_input_devices() -> Vec<(cpal::Device, String)> {
+    let host = cpal::default_host();
+    let mut list = Vec::new();
+    for dev in host.input_devices().unwrap_or_else(|_| panic!("input_devices")) {
+        let name = dev.name().unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        if name.contains("Cpal loopback") || name.contains("cpal output recorder") {
+            continue; // output device для loopback — не микрофон
+        }
+        list.push((dev, name));
+    }
+    list
+}
+
+/// Устройства для loopback (системный звук).
+/// Windows: WASAPI output devices (render).
+/// macOS: cpal output devices (нативный loopback через Core Audio, macOS 14.2+).
+/// Linux: input devices (pulse/pipewire loopback).
 fn list_output_device_names() -> Vec<(usize, String)> {
-    let enumerator = match wasapi::DeviceEnumerator::new() {
-        Ok(e) => e,
-        Err(_) => return vec![],
-    };
-    let collection = match enumerator.get_device_collection(&wasapi::Direction::Render) {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
-    collection
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, r)| {
-            let dev = r.ok()?;
-            dev.get_friendlyname().ok().map(|n| (i, n))
-        })
-        .collect()
+    #[cfg(windows)]
+    {
+        let enumerator = match wasapi::DeviceEnumerator::new() {
+            Ok(e) => e,
+            Err(_) => return vec![],
+        };
+        let collection = match enumerator.get_device_collection(&wasapi::Direction::Render) {
+            Ok(c) => c,
+            Err(_) => return vec![],
+        };
+        let mut list: Vec<(usize, String)> = collection
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, r)| {
+                let dev = r.ok()?;
+                dev.get_friendlyname().ok().map(|n| (i + 1, n))
+            })
+            .collect();
+        list.insert(0, (0, "default-output".to_string()));
+        list
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let devices = match cpal::default_host().output_devices() {
+            Ok(d) => d,
+            Err(_) => return vec![],
+        };
+        let mut list: Vec<(usize, String)> = devices
+            .enumerate()
+            .filter_map(|(i, dev)| dev.name().ok().map(|n| (i + 1, n)))
+            .collect();
+        // "default-output" — нативный loopback (macOS 14.2+)
+        list.insert(0, (0, "default-output".to_string()));
+        list
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        let devices = match cpal::default_host().input_devices() {
+            Ok(d) => d,
+            Err(_) => return vec![],
+        };
+        devices
+            .enumerate()
+            .filter_map(|(i, dev)| dev.name().ok().map(|n| (i, n)))
+            .collect()
+    }
 }
 
 fn run_configure_tui(cfg: &ClientConfig) -> Result<()> {
-    let host = cpal::default_host();
-    let input_devices: Vec<(usize, String)> = host
-        .input_devices()
-        .unwrap_or_else(|_| panic!("input_devices"))
+    let input_devices: Vec<(usize, String)> = collect_input_devices()
+        .into_iter()
         .enumerate()
-        .filter_map(|(i, dev)| dev.name().ok().map(|n| (i, n)))
+        .map(|(i, (_, n))| (i, n))
         .collect();
     let output_devices = list_output_device_names();
 
@@ -363,7 +415,7 @@ struct Cli {
     #[arg(short, long)]
     device: Option<String>,
 
-    /// Системный звук — устройство вывода для loopback (индекс или имя, напр. Razer)
+    /// Системный звук — default-output (дефолт) или индекс/имя устройства (напр. Razer)
     #[arg(long)]
     loopback: Option<String>,
 
@@ -393,12 +445,11 @@ struct Cli {
 fn list_devices() {
     let host = cpal::default_host();
 
-    eprintln!("Устройства ввода:");
-    for (i, dev) in host.input_devices().unwrap().enumerate() {
-        let name = dev.name().unwrap_or_else(|_| "?".into());
+    eprintln!("Устройства ввода (микрофоны):");
+    for (i, (dev, name)) in collect_input_devices().into_iter().enumerate() {
         let cfg = dev.default_input_config();
         let info = match cfg {
-            Ok(c) => format!("rate {}, ch {}", c.sample_rate().0, c.channels()),
+            Ok(c) => format!("rate {}, ch {}", c.sample_rate(), c.channels()),
             Err(_) => "no config".into(),
         };
         let is_default = host
@@ -410,12 +461,14 @@ fn list_devices() {
     }
 
     eprintln!();
-    eprintln!("Устройства вывода:");
+    eprintln!("Устройства вывода (loopback):");
+    #[cfg(any(windows, target_os = "macos"))]
+    eprintln!("  [default-output] системный звук (по умолчанию)");
     for (i, dev) in host.output_devices().unwrap().enumerate() {
         let name = dev.name().unwrap_or_else(|_| "?".into());
         let cfg = dev.default_output_config();
         let info = match cfg {
-            Ok(c) => format!("rate {}, ch {}", c.sample_rate().0, c.channels()),
+            Ok(c) => format!("rate {}, ch {}", c.sample_rate(), c.channels()),
             Err(_) => "no config".into(),
         };
         let is_default = host
@@ -427,25 +480,28 @@ fn list_devices() {
     }
 
     eprintln!();
-    eprintln!("Для захвата системного звука: --loopback Razer или --loopback 0");
+    #[cfg(any(windows, target_os = "macos"))]
+    eprintln!("Для захвата системного звука: --loopback default-output (или имя/индекс устройства)");
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    eprintln!("Для захвата системного звука: --loopback <имя или индекс input-устройства>");
 }
 
 fn resolve_device(query: &str) -> Result<cpal::Device> {
-    let host = cpal::default_host();
+    let devices = collect_input_devices();
 
     if let Ok(idx) = query.parse::<usize>() {
-        return host
-            .input_devices()?
+        return devices
+            .into_iter()
             .nth(idx)
+            .map(|(dev, _)| dev)
             .context(format!("Устройство с индексом {idx} не найдено"));
     }
 
     let needle = query.to_lowercase();
-    let matches: Vec<(usize, cpal::Device, String)> = host
-        .input_devices()?
+    let matches: Vec<(usize, cpal::Device, String)> = devices
+        .into_iter()
         .enumerate()
-        .filter_map(|(i, dev)| {
-            let name = dev.name().unwrap_or_default();
+        .filter_map(|(i, (dev, name))| {
             if name.to_lowercase().contains(&needle) {
                 Some((i, dev, name))
             } else {
@@ -599,13 +655,31 @@ fn audio_capture(
     ui_tx: mpsc::Sender<UiEvent>,
     running: std::sync::Arc<AtomicBool>,
 ) -> Result<()> {
-    let supported = device.default_input_config()?;
-    let native_rate = supported.sample_rate().0;
+    // Для loopback (output device) используем output config — как в cpal record_wav
+    let supported = if device.supports_input() {
+        device.default_input_config()?
+    } else {
+        match device.default_output_config() {
+            Ok(c) => c,
+            Err(cpal::DefaultStreamConfigError::StreamTypeNotSupported) => {
+                // Fallback: некоторые output-устройства на macOS не возвращают default_config
+                // — берём первый supported config (например 48000 Hz, 2 ch)
+                device
+                    .supported_output_configs()
+                    .context("supported_output_configs")?
+                    .next()
+                    .context("Нет supported output configs")?
+                    .with_max_sample_rate()
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
+    let native_rate = supported.sample_rate();
     let native_channels = supported.channels();
 
     let config = cpal::StreamConfig {
         channels: native_channels,
-        sample_rate: cpal::SampleRate(native_rate),
+        sample_rate: native_rate,
         buffer_size: cpal::BufferSize::Default,
     };
 
@@ -664,17 +738,30 @@ fn audio_capture(
     Ok(())
 }
 
+#[cfg(windows)]
 fn resolve_output_device(query: &str) -> Result<wasapi::Device> {
     let enumerator = wasapi::DeviceEnumerator::new()
         .map_err(|e| anyhow::anyhow!("DeviceEnumerator: {e:?}"))?;
 
+    // default-output / default — устройство вывода по умолчанию
+    if query.eq_ignore_ascii_case("default-output") || query.eq_ignore_ascii_case("default") {
+        return enumerator
+            .get_default_device(&wasapi::Direction::Render)
+            .map_err(|e| anyhow::anyhow!("get_default_device: {e:?}"));
+    }
+
     if let Ok(idx) = query.parse::<usize>() {
+        if idx == 0 {
+            return enumerator
+                .get_default_device(&wasapi::Direction::Render)
+                .map_err(|e| anyhow::anyhow!("get_default_device: {e:?}"));
+        }
         let collection = enumerator
             .get_device_collection(&wasapi::Direction::Render)
             .map_err(|e| anyhow::anyhow!("get_device_collection: {e:?}"))?;
         return collection
             .into_iter()
-            .nth(idx)
+            .nth(idx - 1)
             .context(format!("Выходное устройство с индексом {idx} не найдено"))?
             .map_err(|e| anyhow::anyhow!("device error: {e:?}"));
     }
@@ -694,7 +781,78 @@ fn resolve_output_device(query: &str) -> Result<wasapi::Device> {
     anyhow::bail!("Выходное устройство «{query}» не найдено. Запустите --list-devices")
 }
 
+#[cfg(target_os = "macos")]
+fn resolve_output_device_macos(query: &str) -> Result<cpal::Device> {
+    let host = cpal::default_host();
+
+    if query.eq_ignore_ascii_case("default-output") || query.eq_ignore_ascii_case("default") {
+        return host
+            .default_output_device()
+            .context("Нет устройства вывода по умолчанию");
+    }
+
+    if let Ok(idx) = query.parse::<usize>() {
+        if idx == 0 {
+            return host
+                .default_output_device()
+                .context("Нет устройства вывода по умолчанию");
+        }
+        let devices: Vec<_> = host.output_devices()?.collect();
+        return devices
+            .into_iter()
+            .nth(idx - 1)
+            .context(format!("Выходное устройство с индексом {idx} не найдено"));
+    }
+
+    let needle = query.to_lowercase();
+    for dev in host.output_devices()? {
+        let name = dev.name().unwrap_or_default();
+        if name.to_lowercase().contains(&needle) {
+            return Ok(dev);
+        }
+    }
+
+    anyhow::bail!("Выходное устройство «{query}» не найдено. Запустите --list-devices")
+}
+
 fn loopback_capture(
+    device_query: String,
+    ws_tx: mpsc::Sender<WsOutgoing>,
+    ui_tx: mpsc::Sender<UiEvent>,
+    running: std::sync::Arc<AtomicBool>,
+) -> Result<()> {
+    #[cfg(windows)]
+    {
+        loopback_capture_wasapi(device_query, ws_tx, ui_tx, running)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        loopback_capture_macos(device_query, ws_tx, ui_tx, running)
+    }
+
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        // Linux: loopback через virtual device (BlackHole, pulse loopback и т.п.)
+        let device = resolve_device(&device_query)?;
+        audio_capture(device, 1, ws_tx, ui_tx, running)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn loopback_capture_macos(
+    device_query: String,
+    ws_tx: mpsc::Sender<WsOutgoing>,
+    ui_tx: mpsc::Sender<UiEvent>,
+    running: std::sync::Arc<AtomicBool>,
+) -> Result<()> {
+    // Нативный loopback через Core Audio (macOS 14.2+). Output device → input stream.
+    let device = resolve_output_device_macos(&device_query)?;
+    audio_capture(device, 1, ws_tx, ui_tx, running)
+}
+
+#[cfg(windows)]
+fn loopback_capture_wasapi(
     device_query: String,
     ws_tx: mpsc::Sender<WsOutgoing>,
     ui_tx: mpsc::Sender<UiEvent>,
@@ -801,14 +959,19 @@ fn ws_io_thread(
         let port = parsed_url.port().unwrap_or(9745);
         let addr = format!("{}:{}", host, port);
 
+        let sock_addr: std::net::SocketAddr = addr.parse().unwrap_or_else(|_| {
+            eprintln!("⚠ Не удалось распарсить «{addr}», fallback на 127.0.0.1:{port}");
+            std::net::SocketAddr::from(([127, 0, 0, 1], port))
+        });
+
         let tcp = match std::net::TcpStream::connect_timeout(
-            &addr.parse().unwrap_or_else(|_| std::net::SocketAddr::from(([127, 0, 0, 1], port))),
-            Duration::from_secs(3),
+            &sock_addr,
+            Duration::from_secs(5),
         ) {
             Ok(s) => s,
             Err(e) => {
                 let _ = ui_tx.send(UiEvent::Disconnected {
-                    reason: format!("подключение: {e}"),
+                    reason: format!("подключение к {sock_addr}: {e}"),
                 });
                 for _ in 0..20 {
                     if !running.load(Ordering::Relaxed) { return; }
@@ -1044,9 +1207,11 @@ fn run_tui(
                         match key.code {
                             KeyCode::F(2) => {
                                 if settings_state.is_none() {
-                                    let host = cpal::default_host();
-                                    let input_devices: Vec<_> = host.input_devices().unwrap_or_else(|_| panic!("input_devices"))
-                                        .enumerate().filter_map(|(i, d)| d.name().ok().map(|n| (i, n))).collect();
+                                    let input_devices: Vec<_> = collect_input_devices()
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(i, (_, n))| (i, n))
+                                        .collect();
                                     let output_devices = list_output_device_names();
                                     let input_selected = cfg.device.as_ref().and_then(|d| d.parse::<usize>().ok())
                                         .filter(|&i| i < input_devices.len()).unwrap_or(0);
@@ -1497,6 +1662,21 @@ fn main() -> Result<()> {
         let url = Url::parse(&server).context("Некорректный URL сервера")?;
         let ws_url = url.as_str().to_string();
         eprintln!("Подключение к {url} ...");
+
+        // Быстрая TCP-проверка до запуска TUI
+        {
+            let host = url.host_str().unwrap_or("127.0.0.1");
+            let port = url.port().unwrap_or(9745);
+            let test_addr = format!("{host}:{port}");
+            eprintln!("  TCP-тест → {test_addr} ...");
+            match std::net::TcpStream::connect_timeout(
+                &test_addr.parse::<std::net::SocketAddr>().unwrap(),
+                Duration::from_secs(5),
+            ) {
+                Ok(_) => eprintln!("  TCP-тест → OK"),
+                Err(e) => eprintln!("  TCP-тест → ОШИБКА: {e}"),
+            }
+        }
 
         let running = std::sync::Arc::new(AtomicBool::new(true));
         let running_ctrlc = running.clone();

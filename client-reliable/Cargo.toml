@@ -3,13 +3,14 @@ name = "live-transcribe-client-reliable"
 version = "0.1.0"
 edition = "2021"
 description = "Клиент для reliable-transcribe: отображение отставания распознавания и размера папки"
+default-run = "live-transcribe-client-reliable"
 
 [[bin]]
 name = "live-transcribe-client-reliable"
 path = "src/main.rs"
 
 [dependencies]
-cpal = "0.15"
+cpal = "0.17"
 tungstenite = "0.24"
 url = "2"
 ratatui = "0.29"
@@ -18,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
-wasapi = "0.22"
 chrono = "0.4"
 ctrlc = "3"
+
+# Windows: WASAPI для loopback (захват системного звука)
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.22"

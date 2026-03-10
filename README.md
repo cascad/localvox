@@ -29,7 +29,9 @@ cargo run -p live-transcribe-server-reliable --release -- --host 0.0.0.0 --port 
 cargo run -p live-transcribe-client-reliable -- --device 0 --loopback Razer --output transcript.txt
 ```
 
-`--loopback Razer` — захват системного звука (имя или индекс устройства вывода). Без него — только микрофон. F2 — настройки в TUI.
+`--loopback Razer` — захват системного звука. Без него — только микрофон. F2 — настройки в TUI.
+
+**Loopback:** `--loopback default-output` — дефолтный вывод системы (работает на Windows и macOS 14.2+). Или имя/индекс устройства.
 
 ## Возможности
 
