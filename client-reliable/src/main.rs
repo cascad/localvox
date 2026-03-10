@@ -955,14 +955,18 @@ fn ws_io_thread(
     };
 
     while running.load(Ordering::Relaxed) {
-        let host = parsed_url.host_str().unwrap_or("127.0.0.1");
-        let port = parsed_url.port().unwrap_or(9745);
+        let host = parsed_url
+            .host_str()
+            .expect("URL сервера должен содержать host");
+        let host = if host == "localhost" { "127.0.0.1" } else { host };
+        let port = parsed_url
+            .port()
+            .expect("URL сервера должен содержать порт");
         let addr = format!("{}:{}", host, port);
 
-        let sock_addr: std::net::SocketAddr = addr.parse().unwrap_or_else(|_| {
-            eprintln!("⚠ Не удалось распарсить «{addr}», fallback на 127.0.0.1:{port}");
-            std::net::SocketAddr::from(([127, 0, 0, 1], port))
-        });
+        let sock_addr: std::net::SocketAddr = addr
+            .parse()
+            .unwrap_or_else(|_| panic!("не удалось распарсить адрес сервера «{addr}»"));
 
         let tcp = match std::net::TcpStream::connect_timeout(
             &sock_addr,
@@ -1665,14 +1669,16 @@ fn main() -> Result<()> {
 
         // Быстрая TCP-проверка до запуска TUI
         {
-            let host = url.host_str().unwrap_or("127.0.0.1");
-            let port = url.port().unwrap_or(9745);
-            let test_addr = format!("{host}:{port}");
-            eprintln!("  TCP-тест → {test_addr} ...");
-            match std::net::TcpStream::connect_timeout(
-                &test_addr.parse::<std::net::SocketAddr>().unwrap(),
-                Duration::from_secs(5),
-            ) {
+            let host = url
+                .host_str()
+                .expect("URL сервера должен содержать host");
+            let host = if host == "localhost" { "127.0.0.1" } else { host };
+            let port = url.port().expect("URL сервера должен содержать порт");
+            eprintln!("  TCP-тест → {host}:{port} ...");
+            let sock_addr: std::net::SocketAddr = format!("{host}:{port}")
+                .parse()
+                .expect("не удалось распарсить адрес сервера");
+            match std::net::TcpStream::connect_timeout(&sock_addr, Duration::from_secs(5)) {
                 Ok(_) => eprintln!("  TCP-тест → OK"),
                 Err(e) => eprintln!("  TCP-тест → ОШИБКА: {e}"),
             }
