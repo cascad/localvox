@@ -1,0 +1,4 @@
+# Минимальный workspace для Docker-сборки сервера (без клиентов)
+[workspace]
+resolver = "2"
+members = ["server-reliable"]

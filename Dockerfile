@@ -23,9 +23,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /build
 
-COPY Cargo.toml ./
+COPY Cargo.toml.docker ./Cargo.toml
 COPY server-reliable ./server-reliable
-COPY client-reliable ./client-reliable
 
 # builder-shell: интерактивная отладка (cargo build — вручную)
 FROM builder-base AS builder-shell

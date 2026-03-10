@@ -12,7 +12,9 @@
   "ensemble_enabled": true,
   "llm_correction_enabled": true,
   "ollama_url": "http://host.docker.internal:11434",
-  "llm_model": "qwen2.5:7b-instruct",
+  "llm_model": "qwen2.5:3b-instruct",
+  "llm_prompt_single": "Исправь ошибки распознавания речи в тексте.\nКонтекст предыдущих фраз: {context_str}\nТекст: \"{merged_text}\"\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только исправленный текст, без кавычек и пояснений.",
+  "llm_prompt_ensemble": "Даны два варианта распознавания одного аудиофрагмента.\nВариант A (Whisper): \"{whisper_text}\"\nВариант B (GigaAM): \"{gigaam_text}\"\nАлгоритмический мерж: \"{merged_text}\"\nКонтекст предыдущих фраз: {context_str}\n\nВыбери лучший вариант или объедини их. Исправь явные ошибки распознавания.\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только исправленный текст, без кавычек и пояснений.",
   "session_ttl_hours": 24,
   "audio_dir_max_mb": 4096
 }

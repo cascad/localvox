@@ -26,20 +26,36 @@ impl VadDetector {
     }
 
     /// Process a chunk. Returns (is_speech, should_flush).
+    /// Важно: проверяем ВСЕ 20ms-фреймы в чанке, иначе по первому фрейму решаем о 256ms — теряем середину.
     pub fn process_frame(&mut self, pcm: &[u8]) -> (bool, bool) {
         if pcm.len() < self.frame_bytes {
             return (true, false);
         }
-        let samples: Vec<i16> = pcm[..self.frame_bytes]
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        let is_speech = self.vad.is_voice_segment(&samples).unwrap_or(true);
-        if is_speech {
+        let mut any_speech = false;
+        let mut consecutive_silence = 0u32;
+        let mut max_silence = 0u32;
+        for frame in pcm.chunks(self.frame_bytes) {
+            if frame.len() < self.frame_bytes {
+                break;
+            }
+            let samples: Vec<i16> = frame
+                .chunks_exact(2)
+                .map(|c| i16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            let is_speech = self.vad.is_voice_segment(&samples).unwrap_or(true);
+            if is_speech {
+                any_speech = true;
+                consecutive_silence = 0;
+            } else {
+                consecutive_silence += 1;
+                max_silence = max_silence.max(consecutive_silence);
+            }
+        }
+        if any_speech {
             self.silence_frames = 0;
             (true, false)
         } else {
-            self.silence_frames += 1;
+            self.silence_frames += max_silence.max(1);
             let should_flush = self.silence_frames >= self.silence_threshold_frames;
             (false, should_flush)
         }

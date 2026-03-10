@@ -100,7 +100,6 @@ fn apply_filter(text: &str, drop_patterns: &[&str], strip_phrases: &[(&str, bool
         return String::new();
     }
 
-    // Доминирование скобок — типичный мусор
     let dominated_by_brackets = {
         let total = t.chars().count();
         let bracket_chars: usize = t
@@ -115,9 +114,13 @@ fn apply_filter(text: &str, drop_patterns: &[&str], strip_phrases: &[(&str, bool
     }
 
     let lower = t.to_lowercase();
+    let word_count = t.split_whitespace().count();
     for pat in drop_patterns {
         if lower.contains(pat) {
-            return String::new();
+            let pat_words = pat.split_whitespace().count();
+            if word_count <= pat_words + 2 {
+                return String::new();
+            }
         }
     }
 

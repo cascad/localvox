@@ -20,8 +20,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Terminal;
 use serde::{Deserialize, Serialize};
-use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{connect, Message};
+use tungstenite::Message;
 use url::Url;
 
 const SAMPLE_RATE: u32 = 16000;
@@ -83,6 +82,9 @@ struct ClientConfig {
     device2: Option<String>,
     #[serde(default)]
     output: Option<String>,
+    /// Stable client/session ID for server reconnection.
+    #[serde(default)]
+    client_id: Option<String>,
 }
 
 fn find_config_path() -> Option<PathBuf> {
@@ -230,6 +232,7 @@ fn run_configure_tui(cfg: &ClientConfig) -> Result<()> {
                                 loopback,
                                 device2: None,
                                 output: cfg.output.clone().or_else(|| Some("transcript.txt".into())),
+                                client_id: cfg.client_id.clone(),
                             };
                             let path = get_config_save_path();
                             if let Ok(text) = serde_json::to_string_pretty(&save_cfg) {
@@ -571,6 +574,9 @@ struct StatusData {
     /// Размер папки с аудио на сервере (MB)
     #[serde(default)]
     audio_dir_size_mb: Option<f64>,
+    /// Очередь на LLM-коррекцию
+    #[serde(default)]
+    llm_queue: Option<u32>,
 }
 
 enum UiEvent {
@@ -774,26 +780,88 @@ fn ws_io_thread(
     out_rx: mpsc::Receiver<WsOutgoing>,
     ui_tx: mpsc::Sender<UiEvent>,
     running: std::sync::Arc<AtomicBool>,
+    source_count: u8,
+    client_id: Option<String>,
+    initial_recording: bool,
 ) {
     let reconnect_delay = Duration::from_secs(2);
 
+    let parsed_url = match Url::parse(&server_url) {
+        Ok(u) => u,
+        Err(e) => {
+            let _ = ui_tx.send(UiEvent::Disconnected {
+                reason: format!("некорректный URL: {e}"),
+            });
+            return;
+        }
+    };
+
     while running.load(Ordering::Relaxed) {
-        let (mut ws, _) = match connect(server_url.as_str()) {
-            Ok(x) => x,
+        let host = parsed_url.host_str().unwrap_or("127.0.0.1");
+        let port = parsed_url.port().unwrap_or(9745);
+        let addr = format!("{}:{}", host, port);
+
+        let tcp = match std::net::TcpStream::connect_timeout(
+            &addr.parse().unwrap_or_else(|_| std::net::SocketAddr::from(([127, 0, 0, 1], port))),
+            Duration::from_secs(3),
+        ) {
+            Ok(s) => s,
             Err(e) => {
                 let _ = ui_tx.send(UiEvent::Disconnected {
                     reason: format!("подключение: {e}"),
                 });
-                thread::sleep(reconnect_delay);
+                for _ in 0..20 {
+                    if !running.load(Ordering::Relaxed) { return; }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                continue;
+            }
+        };
+        let (mut ws, _) = match tungstenite::client::client_with_config(
+            &server_url,
+            tcp,
+            None,
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                let _ = ui_tx.send(UiEvent::Disconnected {
+                    reason: format!("ws handshake: {e}"),
+                });
+                for _ in 0..20 {
+                    if !running.load(Ordering::Relaxed) { return; }
+                    thread::sleep(Duration::from_millis(100));
+                }
                 continue;
             }
         };
 
+        let mut config_msg = serde_json::json!({
+            "type": "config",
+            "source_count": source_count,
+            "mode": "live",
+        });
+        if let Some(ref id) = client_id {
+            config_msg["session_id"] = serde_json::json!(id);
+        }
+        if ws.send(Message::Text(config_msg.to_string())).is_err() {
+            let _ = ui_tx.send(UiEvent::Disconnected {
+                reason: "ошибка отправки config".into(),
+            });
+            thread::sleep(reconnect_delay);
+            continue;
+        }
+        let recording_msg = serde_json::json!({"type": "recording", "enabled": initial_recording});
+        if ws.send(Message::Text(recording_msg.to_string())).is_err() {
+            let _ = ui_tx.send(UiEvent::Disconnected {
+                reason: "ошибка отправки recording".into(),
+            });
+            thread::sleep(reconnect_delay);
+            continue;
+        }
+
         let _ = ui_tx.send(UiEvent::Connected);
 
-        if let MaybeTlsStream::Plain(ref tcp) = *ws.get_ref() {
-            let _ = tcp.set_read_timeout(Some(Duration::from_millis(20)));
-        }
+        let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
 
         let mut write_errors = 0u32;
         let mut disconnected = false;
@@ -847,7 +915,10 @@ fn ws_io_thread(
 
         let _ = ws.close(None);
         if running.load(Ordering::Relaxed) {
-            thread::sleep(reconnect_delay);
+            for _ in 0..20 {
+                if !running.load(Ordering::Relaxed) { return; }
+                thread::sleep(Duration::from_millis(100));
+            }
         }
     }
 
@@ -876,7 +947,7 @@ fn run_tui(
     ws_tx: mpsc::Sender<WsOutgoing>,
     running: std::sync::Arc<AtomicBool>,
     output_path: &str,
-    has_source2: bool,
+    _has_source2: bool,
     cfg: &ClientConfig,
     initial_recording: bool,
 ) -> Result<(bool, bool)> {
@@ -895,6 +966,8 @@ fn run_tui(
     let mut connected = false;
     let mut last_activity = Instant::now();
     let mut last_audio_dir_mb: Option<f64> = None;
+    let mut last_llm_queue: Option<u32> = None;
+    let mut last_disconnect_reason: Option<String> = None;
 
     let mut mode = TuiMode::Main;
     let mut settings_state: Option<SettingsState> = None;
@@ -937,6 +1010,7 @@ fn run_tui(
                                     loopback,
                                     device2: None,
                                     output: cfg.output.clone().or_else(|| Some("transcript.txt".into())),
+                                    client_id: cfg.client_id.clone(),
                                 };
                                 let path = get_config_save_path();
                                 if let Ok(text) = serde_json::to_string_pretty(&save_cfg) {
@@ -1083,6 +1157,9 @@ fn run_tui(
                     if let Some(mb) = s.audio_dir_size_mb {
                         last_audio_dir_mb = Some(mb);
                     }
+                    if let Some(n) = s.llm_queue {
+                        last_llm_queue = Some(n);
+                    }
                     status = s;
                 }
                 UiEvent::Server(ServerMessage::Debug { text }) => {
@@ -1099,17 +1176,10 @@ fn run_tui(
                 UiEvent::Connected => {
                     connected = true;
                     debug_lines.push("[ws] подключено".into());
-                    if has_source2 {
-                        let _ = ws_tx.send(WsOutgoing::Text(
-                            serde_json::json!({"type": "config", "source_count": 2}).to_string(),
-                        ));
-                    }
-                    let _ = ws_tx.send(WsOutgoing::Text(
-                        serde_json::json!({"type": "recording", "enabled": recording}).to_string(),
-                    ));
                 }
                 UiEvent::Disconnected { reason } => {
                     connected = false;
+                    last_disconnect_reason = Some(reason.clone());
                     debug_lines.push(format!("[ws] отключено: {reason}"));
                 }
                 UiEvent::Quit => {
@@ -1212,10 +1282,21 @@ fn run_tui(
 
             let conn_icon = if connected { "●" } else { "○" };
             let conn_color = if connected { Color::Green } else { Color::Red };
-            let conn_text = if connected { "подключен" } else { "отключен" };
+            let conn_text = if connected {
+                "подключен".to_string()
+            } else {
+                last_disconnect_reason
+                    .as_ref()
+                    .map(|r| format!("отключен ({})", r))
+                    .unwrap_or_else(|| "отключен".to_string())
+            };
 
             let pending_str = last_audio_dir_mb
                 .map(|mb| format!("{:.1} MB", mb))
+                .unwrap_or_else(|| "—".to_string());
+
+            let llm_str = last_llm_queue
+                .map(|n| format!("{}", n))
                 .unwrap_or_else(|| "—".to_string());
 
             let level_bars = (audio_level * 8.0) as usize;
@@ -1235,6 +1316,8 @@ fn run_tui(
                 Span::raw(format!(" {}  ", conn_text)),
                 Span::raw("очередь: "),
                 Span::styled(&pending_str, Style::default().fg(Color::Yellow)),
+                Span::raw("  llm: "),
+                Span::styled(&llm_str, Style::default().fg(Color::Yellow)),
                 Span::raw("  mic "),
                 Span::styled(&level_str, Style::default().fg(Color::Green)),
                 Span::raw("  sys "),
@@ -1274,6 +1357,8 @@ fn run_tui(
             };
             if let Some(ref mut v) = transcript_scroll {
                 *v = (*v).min(t_max);
+            } else {
+                transcript_scroll = Some(t_max);
             }
 
             let t_title = if focus == 0 { "Транскрипция ◄" } else { "Транскрипция" };
@@ -1321,6 +1406,8 @@ fn run_tui(
             };
             if let Some(ref mut v) = debug_scroll {
                 *v = (*v).min(d_max);
+            } else {
+                debug_scroll = Some(d_max);
             }
 
             let d_title = if focus == 1 { "Debug ◄" } else { "Debug" };
@@ -1412,13 +1499,20 @@ fn main() -> Result<()> {
         eprintln!("Подключение к {url} ...");
 
         let running = std::sync::Arc::new(AtomicBool::new(true));
+        let running_ctrlc = running.clone();
+        let _ = ctrlc::set_handler(move || {
+            running_ctrlc.store(false, Ordering::Relaxed);
+        });
+
         let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>();
         let (ws_out_tx, ws_out_rx) = mpsc::channel::<WsOutgoing>();
 
         let ui_tx_ws = ui_tx.clone();
         let running_ws = running.clone();
+        let src_count = if has_source2 { 2 } else { 1 };
+        let client_id = cfg.client_id.clone();
         let ws_thread = thread::spawn(move || {
-            ws_io_thread(ws_url, ws_out_rx, ui_tx_ws, running_ws);
+            ws_io_thread(ws_url, ws_out_rx, ui_tx_ws, running_ws, src_count, client_id, recording);
         });
 
         let ws_out_audio = ws_out_tx.clone();
@@ -1460,7 +1554,19 @@ fn main() -> Result<()> {
         if let Some(t) = audio2_thread {
             let _ = t.join();
         }
-        let _ = ws_thread.join();
+        // ws_thread checks `running` between reconnect attempts;
+        // give it a moment to notice and exit, but don't block forever.
+        let ws_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if ws_thread.is_finished() {
+                let _ = ws_thread.join();
+                break;
+            }
+            if Instant::now() >= ws_deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
 
         if !need_restart {
             break;

@@ -26,3 +26,4 @@ parking_lot = "0.12"
 crossbeam-channel = "0.5"
 sherpa-rs = { version = "0.6", features = ["sys", "download-binaries"] }
 ureq = { version = "2", features = ["json"] }
+uuid = { version = "1", features = ["v4"] }

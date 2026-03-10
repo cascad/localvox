@@ -43,6 +43,27 @@ pub struct Settings {
     /// Ollama model name for correction.
     #[serde(default = "default_llm_model")]
     pub llm_model: String,
+    /// LLM prompt template when only Whisper (no GigaAM). Placeholders: {context_str}, {merged_text}
+    #[serde(default = "default_llm_prompt_single")]
+    pub llm_prompt_single: String,
+    /// LLM prompt template for ensemble (Whisper + GigaAM). Placeholders: {context_str}, {merged_text}, {whisper_text}, {gigaam_text}
+    #[serde(default = "default_llm_prompt_ensemble")]
+    pub llm_prompt_ensemble: String,
+    /// LLM request timeout in seconds. Default 10.
+    #[serde(default = "default_llm_timeout_sec")]
+    pub llm_timeout_sec: u64,
+    /// Number of parallel LLM correction workers (global). Default 2.
+    #[serde(default = "default_llm_pool_size")]
+    pub llm_pool_size: usize,
+    /// Global ASR worker threads. Default 1.
+    #[serde(default = "default_asr_workers")]
+    pub asr_workers: usize,
+    /// Live session reconnect timeout (seconds). Default 300.
+    #[serde(default = "default_live_reconnect_timeout_sec")]
+    pub live_reconnect_timeout_sec: u64,
+    /// How long to keep completed sessions in registry (seconds). Default 3600.
+    #[serde(default = "default_session_idle_timeout_sec")]
+    pub session_idle_timeout_sec: u64,
     /// Удалять сессии старше N часов (0 = отключено).
     #[serde(default = "default_session_ttl_hours")]
     pub session_ttl_hours: f64,
@@ -60,7 +81,39 @@ fn default_ollama_url() -> String {
 fn default_llm_model() -> String {
     "qwen2.5:7b-instruct".to_string()
 }
+fn default_llm_prompt_single() -> String {
+    "Исправь ошибки распознавания речи в тексте.\n\
+     Контекст предыдущих фраз: {context_str}\n\
+     Текст: \"{merged_text}\"\n\
+     Важно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\n\
+     Верни только исправленный текст, без кавычек и пояснений.".to_string()
+}
+fn default_llm_prompt_ensemble() -> String {
+    "Даны два варианта распознавания одного аудиофрагмента.\n\
+     Вариант A (Whisper): \"{whisper_text}\"\n\
+     Вариант B (GigaAM): \"{gigaam_text}\"\n\
+     Алгоритмический мерж: \"{merged_text}\"\n\
+     Контекст предыдущих фраз: {context_str}\n\n\
+     Выбери лучший вариант или объедини их. Исправь явные ошибки распознавания.\n\
+     Важно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\n\
+     Верни только исправленный текст, без кавычек и пояснений.".to_string()
+}
 
+fn default_llm_timeout_sec() -> u64 {
+    10
+}
+fn default_llm_pool_size() -> usize {
+    2
+}
+fn default_asr_workers() -> usize {
+    1
+}
+fn default_live_reconnect_timeout_sec() -> u64 {
+    300
+}
+fn default_session_idle_timeout_sec() -> u64 {
+    3600
+}
 fn default_use_gpu() -> bool {
     true
 }
@@ -111,6 +164,13 @@ impl Default for Settings {
             llm_correction_enabled: false,
             ollama_url: default_ollama_url(),
             llm_model: default_llm_model(),
+            llm_prompt_single: default_llm_prompt_single(),
+            llm_prompt_ensemble: default_llm_prompt_ensemble(),
+            llm_timeout_sec: default_llm_timeout_sec(),
+            llm_pool_size: default_llm_pool_size(),
+            asr_workers: default_asr_workers(),
+            live_reconnect_timeout_sec: default_live_reconnect_timeout_sec(),
+            session_idle_timeout_sec: default_session_idle_timeout_sec(),
             session_ttl_hours: default_session_ttl_hours(),
             audio_dir_max_mb: default_audio_dir_max_mb(),
         }

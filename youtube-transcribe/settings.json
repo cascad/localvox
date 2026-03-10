@@ -1,0 +1,10 @@
+{
+  "yt_dlp_path": "youtube-transcribe/yt-dlp.exe",
+  "ffmpeg_path": "F:\\ffmpeg7.1.1\\bin\\ffmpeg.exe",
+  "js_runtime": "node",
+  "js_runtime_path": "F:\\nodejs\\node.exe",
+  "server": "ws://127.0.0.1:9745",
+  "output_dir": "transcripts",
+  "state_file": "queue.json",
+  "client_id ": "live"
+}

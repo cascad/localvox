@@ -1,74 +1,56 @@
 //! Async LLM correction via Ollama API.
 //! Combines arbiter (picking best variant) and corrector (fixing ASR errors) in one pass.
+//! Stateless: context is passed in by the caller (enables parallel LLM workers).
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
 use std::time::Instant;
-
-const CONTEXT_LINES: usize = 5;
-const TIMEOUT_SEC: u64 = 30;
 
 pub struct LlmCorrector {
     ollama_url: String,
     model: String,
-    context: Mutex<VecDeque<String>>,
+    prompt_single: String,
+    prompt_ensemble: String,
+    timeout_sec: u64,
 }
 
 impl LlmCorrector {
-    pub fn new(ollama_url: &str, model: &str) -> Self {
+    pub fn new(
+        ollama_url: &str,
+        model: &str,
+        prompt_single: &str,
+        prompt_ensemble: &str,
+        timeout_sec: u64,
+    ) -> Self {
         Self {
             ollama_url: ollama_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
-            context: Mutex::new(VecDeque::with_capacity(CONTEXT_LINES + 1)),
+            prompt_single: prompt_single.to_string(),
+            prompt_ensemble: prompt_ensemble.to_string(),
+            timeout_sec: timeout_sec.max(1),
         }
-    }
-
-    pub fn push_context(&self, text: &str) {
-        let mut ctx = self.context.lock().unwrap();
-        ctx.push_back(text.to_string());
-        while ctx.len() > CONTEXT_LINES {
-            ctx.pop_front();
-        }
-    }
-
-    fn build_context_string(&self) -> String {
-        let ctx = self.context.lock().unwrap();
-        if ctx.is_empty() {
-            return "(нет)".to_string();
-        }
-        ctx.iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(" | ")
     }
 
     /// Calls Ollama to correct/arbitrate between two ASR outputs.
     /// Returns corrected text, or None on error/timeout.
+    /// context_str: recent transcript lines for context (e.g. "line1 | line2 | line3").
     pub fn correct(
         &self,
         whisper_text: &str,
         gigaam_text: &str,
         merged_text: &str,
+        context_str: &str,
     ) -> Option<String> {
-        let context_str = self.build_context_string();
+        let context_str = if context_str.is_empty() { "(нет)" } else { context_str };
 
         let prompt = if gigaam_text.is_empty() {
-            format!(
-                "Исправь ошибки распознавания речи в тексте. \
-                 Контекст предыдущих фраз: {context_str}\n\
-                 Текст: \"{merged_text}\"\n\
-                 Верни только исправленный текст, без кавычек и пояснений."
-            )
+            self.prompt_single
+                .replace("{context_str}", context_str)
+                .replace("{merged_text}", merged_text)
         } else {
-            format!(
-                "Даны два варианта распознавания одного аудиофрагмента.\n\
-                 Вариант A (Whisper): \"{whisper_text}\"\n\
-                 Вариант B (GigaAM): \"{gigaam_text}\"\n\
-                 Алгоритмический мерж: \"{merged_text}\"\n\
-                 Контекст предыдущих фраз: {context_str}\n\n\
-                 Выбери лучший вариант или объедини их. Исправь явные ошибки распознавания. \
-                 Верни только исправленный текст, без кавычек и пояснений."
-            )
+            self.prompt_ensemble
+                .replace("{context_str}", context_str)
+                .replace("{merged_text}", merged_text)
+                .replace("{whisper_text}", whisper_text)
+                .replace("{gigaam_text}", gigaam_text)
         };
 
         let body = serde_json::json!({
@@ -85,13 +67,14 @@ impl LlmCorrector {
         let t0 = Instant::now();
 
         let resp = ureq::post(&url)
-            .timeout(std::time::Duration::from_secs(TIMEOUT_SEC))
+            .timeout(std::time::Duration::from_secs(self.timeout_sec))
             .send_json(&body);
 
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("LLM request failed: {}", e);
+                let elapsed = t0.elapsed().as_secs_f64();
+                tracing::warn!("LLM request failed after {:.1}s: {}", elapsed, e);
                 return None;
             }
         };
@@ -99,12 +82,13 @@ impl LlmCorrector {
         let json: serde_json::Value = match resp.into_json() {
             Ok(j) => j,
             Err(e) => {
-                tracing::warn!("LLM response parse error: {}", e);
+                let elapsed = t0.elapsed().as_secs_f64();
+                tracing::warn!("LLM response parse error after {:.1}s: {}", elapsed, e);
                 return None;
             }
         };
 
-        let response_text = json
+        let raw = json
             .get("response")
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -113,15 +97,66 @@ impl LlmCorrector {
             .trim()
             .to_string();
 
-        let elapsed = t0.elapsed().as_secs_f64();
-        tracing::debug!("LLM correction took {:.2}s: {:?}", elapsed, &response_text);
+        let response_text = strip_llm_reasoning(&raw);
 
-        if response_text.is_empty() || response_text.len() > merged_text.len() * 3 {
+        let elapsed = t0.elapsed().as_secs_f64();
+
+        if response_text.is_empty() {
+            tracing::warn!("LLM returned empty response after {:.1}s", elapsed);
+            return None;
+        }
+        if response_text.len() > merged_text.len() * 3 {
+            tracing::warn!("LLM response too long ({} vs {} chars) after {:.1}s, discarding",
+                response_text.len(), merged_text.len(), elapsed);
             return None;
         }
 
+        tracing::info!("LLM correction {:.1}s: {:?}", elapsed, response_text.chars().take(60).collect::<String>());
         Some(response_text)
     }
+}
+
+fn strip_llm_reasoning(text: &str) -> String {
+    let t = text.trim();
+
+    // Только паттерны, которые невозможны в реальной речи — это мета-рассуждения LLM
+    let colon_prefixes = [
+        "используем вариант",
+        "выбираем вариант",
+        "вариант а (whisper)",
+        "вариант б (gigaam)",
+        "вариант a (whisper)",
+        "вариант b (gigaam)",
+        "variant a",
+        "variant b",
+        "corrected:",
+        "corrected text:",
+    ];
+    let lower = t.to_lowercase();
+    for prefix in colon_prefixes {
+        if lower.starts_with(prefix) {
+            if let Some(pos) = t.find(':') {
+                let after = t[pos + 1..].trim();
+                let after = after.trim_start_matches(|c: char| c == '"' || c == '«' || c == '"');
+                let after = after.trim_end_matches(|c: char| c == '"' || c == '»' || c == '"');
+                let after = after.trim();
+                if !after.is_empty() {
+                    return after.to_string();
+                }
+            }
+        }
+    }
+
+    // Strip wrapping quotes: «текст» or "текст"
+    let stripped = t
+        .trim_start_matches(|c: char| c == '«' || c == '"' || c == '"')
+        .trim_end_matches(|c: char| c == '»' || c == '"' || c == '"')
+        .trim();
+    if !stripped.is_empty() && stripped != t {
+        return stripped.to_string();
+    }
+
+    t.to_string()
 }
 
 #[cfg(test)]
@@ -129,11 +164,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_and_push_context() {
-        let c = LlmCorrector::new("http://localhost:11434", "model");
-        for i in 0..10 {
-            c.push_context(&format!("line {}", i));
-        }
-        // Context caps at CONTEXT_LINES, no panic
+    fn test_new_stateless() {
+        let _ = LlmCorrector::new(
+            "http://localhost:11434",
+            "model",
+            "{context_str} {merged_text}",
+            "{context_str} {merged_text} {whisper_text} {gigaam_text}",
+            10,
+        );
+    }
+
+    #[test]
+    fn test_strip_variant_prefix_ru() {
+        let r = strip_llm_reasoning("Используем вариант А (Whisper): \"Во-первых, у меня самые лучшие\"");
+        assert_eq!(r, "Во-первых, у меня самые лучшие");
+    }
+
+    #[test]
+    fn test_strip_variant_b_gigaam() {
+        let r = strip_llm_reasoning("Вариант Б (GigaAM): текст после двоеточия");
+        assert_eq!(r, "текст после двоеточия");
+    }
+
+    #[test]
+    fn test_strip_quotes() {
+        let r = strip_llm_reasoning("«Привет, как дела?»");
+        assert_eq!(r, "Привет, как дела?");
+    }
+
+    #[test]
+    fn test_strip_corrected_prefix() {
+        let r = strip_llm_reasoning("Corrected: Вот правильный вариант");
+        assert_eq!(r, "Вот правильный вариант");
+    }
+
+    #[test]
+    fn test_real_speech_preserved() {
+        assert_eq!(strip_llm_reasoning("Результат: мы получили отличный"), "Результат: мы получили отличный");
+        assert_eq!(strip_llm_reasoning("Ответ: да, конечно"), "Ответ: да, конечно");
+        assert_eq!(strip_llm_reasoning("Исправленный текст: вот он"), "Исправленный текст: вот он");
+    }
+
+    #[test]
+    fn test_passthrough_clean() {
+        let r = strip_llm_reasoning("Просто нормальный текст без мусора");
+        assert_eq!(r, "Просто нормальный текст без мусора");
     }
 }

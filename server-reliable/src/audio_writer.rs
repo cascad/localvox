@@ -3,7 +3,7 @@
 use crate::vad::VadDetector;
 use chrono::Utc;
 use hound::{WavSpec, WavWriter, SampleFormat};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::fs::File;
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 const WAV_HEADER_BYTES: u64 = 44;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct MetaJson {
     start_time_sec: f64,
     end_time_sec: f64,
@@ -29,6 +29,8 @@ struct SourceState {
     overlap_sec: f64,
     seq: u32,
     duration_sec: f64,
+    /// Cumulative position in audio stream (sec). Used for start_time_sec so client can sort correctly.
+    cumulative_audio_sec: f64,
     part_path: Option<PathBuf>,
     writer: Option<WavWriter<File>>,
     segment_start_time: Option<f64>,
@@ -68,7 +70,7 @@ impl SourceState {
         }
         self.part_path = Some(path);
         self.writer = Some(writer);
-        self.segment_start_time = Some(Utc::now().timestamp_millis() as f64 / 1000.0);
+        self.segment_start_time = Some(self.cumulative_audio_sec);
         Ok(())
     }
 
@@ -109,6 +111,7 @@ impl SourceState {
                 if let Ok(s) = serde_json::to_string_pretty(&meta) {
                     let _ = fs::write(meta_path, s);
                 }
+                self.cumulative_audio_sec = end_time_sec;
             }
         }
         Ok(Some(final_path))
@@ -145,16 +148,18 @@ impl SourceState {
         let flush_time = self.duration_sec >= self.max_chunk_sec && self.writer.is_some();
 
         if flush_vad {
-            // Важно: записать текущий чанк перед закрытием, иначе теряется конец фразы
             self.write_pcm(pcm)?;
             self.add_to_overlap(pcm);
             self.vad.reset_silence();
+            let overlap = self.get_overlap_bytes();
             if let Some(p) = self.close_and_finalize()? {
                 completed.push(p);
             }
             self.duration_sec = 0.0;
             self.overlap_chunks.clear();
             self.overlap_bytes = 0;
+            let prepend = if overlap.is_empty() { None } else { Some(overlap.as_slice()) };
+            self.open_new_file(prepend)?;
             return Ok(completed);
         }
 
@@ -222,13 +227,97 @@ impl AudioWriter {
         }
     }
 
-    pub fn start_session(&mut self) -> Result<PathBuf, std::io::Error> {
-        let ts = Utc::now().format("%Y%m%d_%H%M%S");
-        let session_dir = self.audio_dir.join(format!("session_{}", ts));
+    /// Start a new session. If session_id is Some, use session_<id>; else session_<timestamp>.
+    pub fn start_session(&mut self, session_id: Option<&str>) -> Result<PathBuf, std::io::Error> {
+        let dir_name = match session_id.filter(|s| !s.is_empty()) {
+            Some(id) => format!("session_{}", id),
+            None => format!("session_{}", Utc::now().format("%Y%m%d_%H%M%S")),
+        };
+        let session_dir = self.audio_dir.join(dir_name);
         fs::create_dir_all(&session_dir)?;
         self.session_dir = Some(session_dir.clone());
         self.sources.clear();
         Ok(session_dir)
+    }
+
+    /// Resume writing into an existing session dir. Scans for max seq per source.
+    pub fn resume_session(
+        &mut self,
+        session_dir: PathBuf,
+        source_count: u8,
+    ) -> Result<(), std::io::Error> {
+        self.session_dir = Some(session_dir.clone());
+        self.source_count = source_count.clamp(1, 2);
+        self.sources.clear();
+        let mut max_seq: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+        let entries = fs::read_dir(&session_dir)?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            for sid in 0..=1u8 {
+                let prefix = format!("src{}_", sid);
+                if name.starts_with(&prefix) {
+                    if let Some(num_part) = name.strip_prefix(&prefix) {
+                        let num_str = num_part
+                            .strip_suffix(".part")
+                            .or_else(|| num_part.strip_suffix(".wav"))
+                            .or_else(|| num_part.strip_suffix(".meta.json"))
+                            .unwrap_or(num_part);
+                        if let Ok(seq) = num_str.parse::<u32>() {
+                            max_seq
+                                .entry(sid)
+                                .and_modify(|v| *v = (*v).max(seq))
+                                .or_insert(seq);
+                        }
+                    }
+                }
+            }
+        }
+        let mut cumulative_per_source: std::collections::HashMap<u8, f64> =
+            std::collections::HashMap::new();
+        for (&sid, &seq) in &max_seq {
+            if seq == 0 {
+                continue;
+            }
+            let meta_path = session_dir.join(format!("src{}_{}.meta.json", sid, seq));
+            if let Ok(data) = fs::read_to_string(&meta_path) {
+                if let Ok(meta) = serde_json::from_str::<MetaJson>(&data) {
+                    cumulative_per_source.insert(sid, meta.end_time_sec);
+                }
+            }
+        }
+        let silence_frames = (self.settings.sample_rate as f64
+            * self.settings.vad_silence_sec
+            / 320.0)
+            .ceil() as u32;
+        for sid in 0..=1u8 {
+            if sid == 1 && self.source_count < 2 {
+                continue;
+            }
+            let seq = max_seq.get(&sid).copied().unwrap_or(0);
+            let cumulative_audio_sec = cumulative_per_source.get(&sid).copied().unwrap_or(0.0);
+            self.sources.insert(
+                sid,
+                SourceState {
+                    source_id: sid,
+                    session_dir: session_dir.clone(),
+                    sample_rate: self.settings.sample_rate,
+                    max_chunk_sec: self.settings.max_chunk_duration_sec,
+                    min_chunk_sec: self.settings.min_chunk_duration_sec,
+                    vad_silence_sec: self.settings.vad_silence_sec,
+                    overlap_sec: self.settings.overlap_sec,
+                    seq,
+                    duration_sec: 0.0,
+                    cumulative_audio_sec,
+                    part_path: None,
+                    writer: None,
+                    segment_start_time: None,
+                    overlap_chunks: VecDeque::new(),
+                    overlap_bytes: 0,
+                    vad: VadDetector::new(self.settings.sample_rate, silence_frames),
+                },
+            );
+        }
+        Ok(())
     }
 
     pub fn set_source_count(&mut self, n: u8) {
@@ -262,6 +351,7 @@ impl AudioWriter {
                     overlap_sec: self.settings.overlap_sec,
                     seq: 0,
                     duration_sec: 0.0,
+                    cumulative_audio_sec: 0.0,
                     part_path: None,
                     writer: None,
                     segment_start_time: None,
