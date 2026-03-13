@@ -24,6 +24,8 @@ hound = "3.5"
 chrono = "0.4"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
-sherpa-rs = { version = "0.6", features = ["sys", "download-binaries"] }
+sherpa-rs = { version = "0.6", default-features = false, features = ["sys", "cuda"] }
+ndarray = "0.17"
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }

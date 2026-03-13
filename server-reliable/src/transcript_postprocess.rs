@@ -84,6 +84,23 @@ fn pick_best_word<'a>(a: Option<&'a str>, b: Option<&'a str>) -> &'a str {
     }
 }
 
+/// Объединяет результаты N моделей через последовательный pairwise word-level alignment.
+/// N=0: пусто, N=1: как есть, N=2+: merge первых двух, затем результат с третьей и т.д.
+pub fn ensemble_merge_n(texts: &[&str]) -> String {
+    let texts: Vec<&str> = texts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    match texts.len() {
+        0 => String::new(),
+        1 => texts[0].to_string(),
+        _ => {
+            let mut acc = texts[0].to_string();
+            for t in &texts[1..] {
+                acc = ensemble_merge(&acc, t);
+            }
+            acc
+        }
+    }
+}
+
 /// Объединяет результаты Whisper и GigaAM через word-level alignment.
 pub fn ensemble_merge(whisper_text: &str, gigaam_text: &str) -> String {
     let w = whisper_text.trim();
@@ -166,5 +183,30 @@ mod tests {
         let (merged, tail) = process_segment("prev tail", "");
         assert_eq!(merged, "");
         assert_eq!(tail, "prev tail");
+    }
+
+    #[test]
+    fn test_ensemble_merge_n_empty() {
+        assert_eq!(ensemble_merge_n(&[]), "");
+    }
+
+    #[test]
+    fn test_ensemble_merge_n_single() {
+        assert_eq!(ensemble_merge_n(&["hello"]), "hello");
+    }
+
+    #[test]
+    fn test_ensemble_merge_n_two() {
+        assert_eq!(ensemble_merge_n(&["hello", "world"]), ensemble_merge("hello", "world"));
+    }
+
+    #[test]
+    fn test_ensemble_merge_n_three() {
+        let a = "привет";
+        let b = "привет мир";
+        let c = "привет большой мир";
+        let ab = ensemble_merge(a, b);
+        let abc = ensemble_merge(&ab, c);
+        assert_eq!(ensemble_merge_n(&[a, b, c]), abc);
     }
 }

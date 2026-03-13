@@ -2,6 +2,7 @@
 //! Combines arbiter (picking best variant) and corrector (fixing ASR errors) in one pass.
 //! Stateless: context is passed in by the caller (enables parallel LLM workers).
 
+use crate::processor::ModelOutput;
 use std::time::Instant;
 
 pub struct LlmCorrector {
@@ -29,31 +30,49 @@ impl LlmCorrector {
         }
     }
 
-    /// Calls Ollama to correct/arbitrate between two ASR outputs.
+    /// Calls Ollama to correct/arbitrate between ASR outputs.
     /// Returns corrected text, or None on error/timeout.
-    /// context_str: recent transcript lines for context (e.g. "line1 | line2 | line3").
+    /// Overlap between segments is handled algorithmically after LLM; LLM only corrects and picks variants.
     pub fn correct(
         &self,
-        whisper_text: &str,
-        gigaam_text: &str,
+        model_outputs: &[ModelOutput],
         merged_text: &str,
         context_str: &str,
     ) -> Option<String> {
         let context_str = if context_str.is_empty() { "(нет)" } else { context_str };
 
-        let prompt = if gigaam_text.is_empty() {
+        let prompt = if model_outputs.len() <= 1 {
             self.prompt_single
                 .replace("{context_str}", context_str)
                 .replace("{merged_text}", merged_text)
         } else {
-            self.prompt_ensemble
+            let model_variants: String = model_outputs
+                .iter()
+                .enumerate()
+                .map(|(i, o)| {
+                    let label = (b'A' + i as u8) as char;
+                    format!("Вариант {} ({}): \"{}\"", label, o.model_name, o.text)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut p = self.prompt_ensemble
                 .replace("{context_str}", context_str)
                 .replace("{merged_text}", merged_text)
-                .replace("{whisper_text}", whisper_text)
-                .replace("{gigaam_text}", gigaam_text)
+                .replace("{model_variants}", &model_variants);
+            if model_outputs.len() >= 2 {
+                let w = model_outputs.iter().find(|o| o.model_name == "whisper").map(|o| o.text.as_str()).unwrap_or("");
+                let g = model_outputs.iter().find(|o| o.model_name == "gigaam").map(|o| o.text.as_str()).unwrap_or("");
+                p = p.replace("{whisper_text}", w).replace("{gigaam_text}", g);
+            }
+            p
         };
 
-        let body = serde_json::json!({
+        self.do_request(&prompt, merged_text)
+    }
+
+    fn do_request(&self, prompt: &str, merged_text: &str) -> Option<String> {
+        let is_thinking_model = self.model.contains("3.5") || self.model.to_lowercase().contains("deepseek");
+        let mut body = serde_json::json!({
             "model": self.model,
             "prompt": prompt,
             "stream": false,
@@ -62,6 +81,9 @@ impl LlmCorrector {
                 "num_predict": 256,
             }
         });
+        if is_thinking_model {
+            body["think"] = serde_json::json!(false);
+        }
 
         let url = format!("{}/api/generate", self.ollama_url);
         let t0 = Instant::now();
@@ -98,7 +120,6 @@ impl LlmCorrector {
             .to_string();
 
         let response_text = strip_llm_reasoning(&raw);
-
         let elapsed = t0.elapsed().as_secs_f64();
 
         if response_text.is_empty() {
@@ -125,10 +146,15 @@ fn strip_llm_reasoning(text: &str) -> String {
         "выбираем вариант",
         "вариант а (whisper)",
         "вариант б (gigaam)",
+        "вариант в (silero)",
+        "вариант в (parakeet)",
         "вариант a (whisper)",
         "вариант b (gigaam)",
+        "вариант c (silero)",
+        "вариант c (parakeet)",
         "variant a",
         "variant b",
+        "variant c",
         "corrected:",
         "corrected text:",
     ];

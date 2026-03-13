@@ -1,5 +1,5 @@
-//! GigaAM v3 CTC ASR через sherpa-onnx (NeMo CTC).
-//! Модель: sherpa-onnx-nemo-ctc-giga-am-v3-russian.
+//! GigaAM v3 CTC ASR via sherpa-onnx (NeMo CTC).
+//! Model: sherpa-onnx-nemo-ctc-giga-am-v3-russian.
 
 use anyhow::{Context, Result};
 use hound::WavReader;
@@ -7,17 +7,21 @@ use sherpa_rs::sherpa_rs_sys as sys;
 use std::ffi::CString;
 use std::path::Path;
 
-/// GigaAM CTC распознаватель (sherpa-onnx NeMo).
-pub struct GigaAM {
+use crate::hallucination;
+
+/// GigaAM CTC recognizer (sherpa-onnx NeMo).
+pub struct GigaAmAdapter {
     recognizer: *const sys::SherpaOnnxOfflineRecognizer,
+    backend: &'static str,
 }
 
-unsafe impl Send for GigaAM {}
-unsafe impl Sync for GigaAM {}
+unsafe impl Send for GigaAmAdapter {}
+unsafe impl Sync for GigaAmAdapter {}
 
-impl GigaAM {
-    /// Загружает модель из директории (model.int8.onnx + tokens.txt).
-    pub fn new(model_dir: &Path) -> Result<Self> {
+impl GigaAmAdapter {
+    /// Loads model from directory (model.int8.onnx + tokens.txt).
+    /// use_gpu: if true, uses "cuda" provider (requires sherpa-rs built with cuda feature).
+    pub fn new(model_dir: &Path, use_gpu: bool) -> Result<Self> {
         let model_path = model_dir.join("model.int8.onnx");
         let tokens_path = model_dir.join("tokens.txt");
         if !model_path.is_file() {
@@ -34,7 +38,8 @@ impl GigaAM {
             .context("model path")?;
         let tokens_c = CString::new(tokens_path.to_string_lossy().as_bytes())
             .context("tokens path")?;
-        let provider_c = CString::new("cpu").context("provider")?;
+        let provider = if use_gpu { "cuda" } else { "cpu" };
+        let provider_c = CString::new(provider).context("provider")?;
         let decoding_c = CString::new("greedy_search").context("decoding")?;
 
         let nemo_ctc = sys::SherpaOnnxOfflineNemoEncDecCtcModelConfig {
@@ -68,19 +73,20 @@ impl GigaAM {
             hr: unsafe { std::mem::zeroed() },
         };
 
-        let recognizer = unsafe {
-            sys::SherpaOnnxCreateOfflineRecognizer(&recognizer_config)
-        };
+        let recognizer = unsafe { sys::SherpaOnnxCreateOfflineRecognizer(&recognizer_config) };
         if recognizer.is_null() {
             anyhow::bail!("SherpaOnnxCreateOfflineRecognizer failed");
         }
 
-        tracing::info!("GigaAM loaded: {}", model_dir.display());
-        Ok(Self { recognizer })
+        let backend = if use_gpu { "GPU" } else { "CPU" };
+        tracing::info!("GigaAM loaded: {} (provider: {})", model_dir.display(), provider);
+        Ok(Self {
+            recognizer,
+            backend,
+        })
     }
 
-    /// Транскрибирует WAV-файл. Возвращает текст или пустую строку.
-    pub fn transcribe(&self, wav_path: &Path) -> Result<String> {
+    fn transcribe_inner(&self, wav_path: &Path) -> Result<String> {
         let (samples, sample_rate) = wav_to_f32(wav_path)?;
         if samples.is_empty() {
             return Ok(String::new());
@@ -113,11 +119,34 @@ impl GigaAM {
     }
 }
 
-impl Drop for GigaAM {
+impl Drop for GigaAmAdapter {
     fn drop(&mut self) {
         unsafe {
             sys::SherpaOnnxDestroyOfflineRecognizer(self.recognizer);
         }
+    }
+}
+
+impl super::AsrModel for GigaAmAdapter {
+    fn name(&self) -> &str {
+        "gigaam"
+    }
+
+    fn backend(&self) -> &str {
+        self.backend
+    }
+
+    fn transcribe(
+        &self,
+        wav_path: &Path,
+        _samples: &[f32],
+        _language: &str,
+    ) -> Result<String> {
+        self.transcribe_inner(wav_path)
+    }
+
+    fn filter_hallucinations(&self, text: &str) -> String {
+        hallucination::filter_gigaam(text)
     }
 }
 

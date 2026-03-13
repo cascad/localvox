@@ -4,6 +4,18 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Single ASR model entry. Used in the new `models` array or synthesized from legacy config.
+#[derive(Clone, Debug, Deserialize)]
+pub struct ModelEntry {
+    #[serde(rename = "type")]
+    pub model_type: String, // "whisper" | "gigaam" | "silero"
+    pub model_path: String,
+    #[serde(default)]
+    pub tokens_path: Option<String>,
+    #[serde(default)]
+    pub use_gpu: Option<bool>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -70,6 +82,9 @@ pub struct Settings {
     /// Макс. размер audio_dir в MB (0 = без лимита). При превышении удаляются старые сессии.
     #[serde(default = "default_audio_dir_max_mb")]
     pub audio_dir_max_mb: f64,
+    /// New models array. If absent, synthesized from model_path + gigaam_model_dir + ensemble_enabled.
+    #[serde(default)]
+    pub models: Option<Vec<ModelEntry>>,
 }
 
 fn default_ensemble_enabled() -> bool {
@@ -89,9 +104,8 @@ fn default_llm_prompt_single() -> String {
      Верни только исправленный текст, без кавычек и пояснений.".to_string()
 }
 fn default_llm_prompt_ensemble() -> String {
-    "Даны два варианта распознавания одного аудиофрагмента.\n\
-     Вариант A (Whisper): \"{whisper_text}\"\n\
-     Вариант B (GigaAM): \"{gigaam_text}\"\n\
+    "Даны варианты распознавания одного аудиофрагмента.\n\
+     {model_variants}\n\
      Алгоритмический мерж: \"{merged_text}\"\n\
      Контекст предыдущих фраз: {context_str}\n\n\
      Выбери лучший вариант или объедини их. Исправь явные ошибки распознавания.\n\
@@ -150,6 +164,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             model_path: None,
+            models: None,
             language: default_language(),
             audio_dir: default_audio_dir(),
             sample_rate: default_sample_rate(),
@@ -177,22 +192,69 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// Returns the effective list of models to load. If `models` array is present, uses it.
+    /// Otherwise synthesizes from legacy fields: model_path -> whisper, ensemble_enabled + gigaam_model_dir -> gigaam.
+    pub fn resolved_models(&self) -> Vec<ModelEntry> {
+        if let Some(ref models) = self.models {
+            if !models.is_empty() {
+                return models.clone();
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(ref p) = self.model_path {
+            if !p.trim().is_empty() {
+                out.push(ModelEntry {
+                    model_type: "whisper".to_string(),
+                    model_path: p.clone(),
+                    tokens_path: None,
+                    use_gpu: Some(self.use_gpu),
+                });
+            }
+        }
+        if self.ensemble_enabled {
+            if let Some(ref dir) = self.gigaam_model_dir {
+                if !dir.trim().is_empty() {
+                    out.push(ModelEntry {
+                        model_type: "gigaam".to_string(),
+                        model_path: dir.clone(),
+                        tokens_path: None,
+                        use_gpu: None,
+                    });
+                }
+            }
+        }
+        out
+    }
+}
+
 fn settings_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
+    if let Some(path) = std::env::var_os("LOCALVOX_SETTINGS") {
+        out.push(PathBuf::from(path));
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             out.push(dir.join("settings.json"));
+            out.push(dir.join("settings.docker.json"));
             out.push(dir.join("..").join("server-reliable").join("settings.json"));
+            out.push(dir.join("..").join("server-reliable").join("settings.docker.json"));
             out.push(dir.join("..").join("settings.json"));
+            out.push(dir.join("..").join("settings.docker.json"));
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
         out.push(cwd.join("server-reliable").join("settings.json"));
+        out.push(cwd.join("server-reliable").join("settings.docker.json"));
         out.push(cwd.join("settings.json"));
+        out.push(cwd.join("settings.docker.json"));
     }
     out.push(PathBuf::from("settings.json"));
+    out.push(PathBuf::from("settings.docker.json"));
     out.push(PathBuf::from("..").join("server-reliable").join("settings.json"));
+    out.push(PathBuf::from("..").join("server-reliable").join("settings.docker.json"));
     out.push(PathBuf::from("..").join("settings.json"));
+    out.push(PathBuf::from("..").join("settings.docker.json"));
     out
 }
 
@@ -228,6 +290,33 @@ mod tests {
         assert_eq!(s.language, "ru");
         assert_eq!(s.sample_rate, 16000);
     }
+
+    #[test]
+    fn test_resolved_models_legacy() {
+        let s = Settings {
+            model_path: Some("/path/whisper.bin".to_string()),
+            ensemble_enabled: true,
+            gigaam_model_dir: Some("/path/gigaam".to_string()),
+            ..Default::default()
+        };
+        let models = s.resolved_models();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].model_type, "whisper");
+        assert_eq!(models[0].model_path, "/path/whisper.bin");
+        assert_eq!(models[1].model_type, "gigaam");
+        assert_eq!(models[1].model_path, "/path/gigaam");
+    }
+
+    #[test]
+    fn test_resolved_models_new() {
+        let json = r#"{"models": [{"type": "silero", "model_path": "/models/silero.onnx", "tokens_path": "/models/tokens.txt"}]}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        let models = s.resolved_models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model_type, "silero");
+        assert_eq!(models[0].model_path, "/models/silero.onnx");
+        assert_eq!(models[0].tokens_path.as_deref(), Some("/models/tokens.txt"));
+    }
 }
 
 pub fn load_settings(model_path_override: Option<&str>) -> Result<Settings> {
@@ -235,6 +324,11 @@ pub fn load_settings(model_path_override: Option<&str>) -> Result<Settings> {
         if path.is_file() {
             let s = std::fs::read_to_string(&path)
                 .with_context(|| format!("read {}", path.display()))?;
+            let llm_on = serde_json::from_str::<serde_json::Value>(&s)
+                .ok()
+                .and_then(|v| v.get("llm_correction_enabled").and_then(|b| b.as_bool()))
+                .unwrap_or(false);
+            tracing::info!("Config: {} (llm_correction={})", path.display(), llm_on);
             let mut settings: Settings = serde_json::from_str(&s)
                 .with_context(|| format!("parse {}", path.display()))?;
             if let Some(p) = model_path_override {

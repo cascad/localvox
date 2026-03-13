@@ -20,8 +20,12 @@ services:
       - "${WHISPER_MODELS_HOST:-./models/whisper}:/models/whisper:ro"
       # GigaAM (папка с model.int8.onnx и tokens.txt)
       - "${GIGAAM_MODELS_HOST:-./models/gigaam-v3-ctc-ru}:/models/gigaam:ro"
+      # Parakeet TDT 0.6B (encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx, tokens.txt)
+      - "${PARAKEET_MODELS_HOST:-./models/parakeet-tdt-0.6b-v3-int8}:/models/parakeet-tdt-0.6b-v3-int8:ro"
       # Буфер аудио (read-write)
       - "localvox-audio:/app/audio"
+      # Настройки (можно менять без rebuild)
+      - "./server-reliable/settings.docker.json:/app/settings.json:ro"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
 

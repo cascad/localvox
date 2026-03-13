@@ -9,7 +9,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use whisper_rs::{WhisperContext, WhisperContextParameters};
+/// One model's output in a transcript batch (when correction disabled + N models).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptVariant {
+    pub model: String,
+    pub text: String,
+}
 
 /// Messages sent to the client.
 #[derive(Clone)]
@@ -19,17 +24,24 @@ pub enum ClientMessage {
         source: u8,
         start_sec: f64,
         end_sec: f64,
+        /// Segment ID for batch grouping (e.g. for later LLM processing).
+        seg_id: String,
+        /// When correction disabled + N models: all variants labeled by model.
+        #[allow(clippy::type_complexity)]
+        variants: Option<Vec<TranscriptVariant>>,
     },
     Status(serde_json::Value),
     /// Signals that all queued segments have been processed (for batch/YouTube clients).
     Done,
 }
 
-/// Checkpoint after Whisper+GigaAM (Stage 0 -> 1).
+/// Output from a single ASR model. Re-exported from asr for use in processor.
+pub use crate::asr::ModelOutput;
+
+/// Checkpoint after ASR (Stage 0 -> 1). Supports 1+ models; ensemble = 2+.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AsrResult {
-    pub whisper_text: String,
-    pub gigaam_text: String,
+    pub model_outputs: Vec<ModelOutput>,
     pub merged_text: String,
     pub start_sec: f64,
     pub end_sec: f64,
@@ -38,10 +50,13 @@ pub struct AsrResult {
 }
 
 /// Task sent to LLM pool. output_sink allows global dispatcher to route to correct session.
-/// llm_inflight: when LLM completes, fetch_sub(1) for wait_until_empty.
+/// prev_tail: tail of last SENT segment (for algorithmic merge_overlap after LLM).
+/// worker_state: to update prev_tail after we emit.
 pub struct LlmTask {
     pub asr: AsrResult,
     pub context_snapshot: String,
+    pub prev_tail: String,
+    pub worker_state: Arc<Mutex<WorkerState>>,
     pub asr_path: PathBuf,
     pub wav_path: PathBuf,
     pub meta_path: PathBuf,
@@ -66,13 +81,17 @@ impl OutputSink {
     /// For Transcript/Done: append to transcript.jsonl, then forward to client.
     pub fn send(&self, msg: &ClientMessage) {
         match msg {
-            ClientMessage::Transcript { text, source, start_sec, end_sec } => {
-                let line = serde_json::json!({
+            ClientMessage::Transcript { text, source, start_sec, end_sec, seg_id, variants } => {
+                let mut line = serde_json::json!({
                     "text": text,
                     "source": source,
                     "start_sec": start_sec,
                     "end_sec": end_sec,
+                    "seg_id": seg_id,
                 });
+                if let Some(ref v) = variants {
+                    line["variants"] = serde_json::to_value(v).unwrap_or_default();
+                }
                 if let Ok(mut f) = OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -135,11 +154,26 @@ impl OutputSink {
                         v.get("start_sec").and_then(|x| x.as_f64()),
                         v.get("end_sec").and_then(|x| x.as_f64()),
                     ) {
+                        let variants = v.get("variants")
+                            .and_then(|a| a.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|o| {
+                                        Some(TranscriptVariant {
+                                            model: o.get("model")?.as_str()?.to_string(),
+                                            text: o.get("text")?.as_str()?.to_string(),
+                                        })
+                                    })
+                                    .collect::<Vec<_>>()
+                            });
+                        let seg_id = v.get("seg_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
                         let _ = tx.send(ClientMessage::Transcript {
                             text: text.to_string(),
                             source: source as u8,
                             start_sec: start,
                             end_sec: end,
+                            seg_id,
+                            variants,
                         });
                     }
                 }
@@ -203,17 +237,6 @@ impl Clone for TranscribedEnd {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
-}
-
-pub fn load_whisper(model_path: &str, use_gpu: bool) -> anyhow::Result<WhisperContext> {
-    let mut params = WhisperContextParameters::default();
-    params.use_gpu = use_gpu;
-    let backend = if use_gpu { "GPU (CUDA)" } else { "CPU" };
-    tracing::info!("Whisper backend: {}", backend);
-    let context = WhisperContext::new_with_params(model_path, params)
-        .map_err(|e| anyhow::anyhow!("WhisperContext::new_with_params: {:?}", e))?;
-    tracing::info!("Whisper loaded (requested: {})", backend);
-    Ok(context)
 }
 
 pub fn wav_to_f32(path: &Path) -> anyhow::Result<Vec<f32>> {

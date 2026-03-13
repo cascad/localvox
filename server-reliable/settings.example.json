@@ -1,5 +1,4 @@
 {
-  "model_path": "models/whisper/ggml-large-v3-turbo.bin",
   "use_gpu": true,
   "cuda_path": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.x/bin",
   "language": "ru",
@@ -9,13 +8,16 @@
   "min_chunk_duration_sec": 2,
   "vad_silence_sec": 1.0,
   "overlap_sec": 2.5,
-  "gigaam_model_dir": "models/gigaam-v3-ctc-ru",
-  "ensemble_enabled": true,
-  "llm_correction_enabled": false,
+  "llm_correction_enabled": true,
   "ollama_url": "http://localhost:11434",
-  "llm_model": "qwen2.5:7b-instruct",
-  "llm_prompt_single": "Исправь ошибки распознавания речи в тексте.\nКонтекст предыдущих фраз: {context_str}\nТекст: \"{merged_text}\"\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только исправленный текст, без кавычек и пояснений.",
-  "llm_prompt_ensemble": "Даны два варианта распознавания одного аудиофрагмента.\nВариант A (Whisper): \"{whisper_text}\"\nВариант B (GigaAM): \"{gigaam_text}\"\nАлгоритмический мерж: \"{merged_text}\"\nКонтекст предыдущих фраз: {context_str}\n\nВыбери лучший вариант или объедини их. Исправь явные ошибки распознавания.\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только исправленный текст, без кавычек и пояснений.",
+  "llm_model": "qwen3.5:4b",
+  "llm_prompt_single": "Исправь ошибки распознавания речи в тексте.\nТекст: \"{merged_text}\"\nКонтекст предыдущих фраз: {context_str}\n\nИсправь явные ошибки распознавания.\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только исправленный текст, без кавычек и пояснений.",
+  "llm_prompt_ensemble": "Даны варианты распознавания одного аудиофрагмента от разных ASR-моделей.\n\n{model_variants}\n\nАлгоритмический мерж (word-level alignment): \"{merged_text}\"\nКонтекст предыдущих фраз: {context_str}\n\nЗадача: умный мерж вариантов — объедини лучшие части из разных моделей (где одна точнее, другая полнее и т.п.), а не просто выбери один. Исправь явные ошибки распознавания.\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только итоговый текст, без кавычек и пояснений.",
   "session_ttl_hours": 24,
-  "audio_dir_max_mb": 1024
+  "audio_dir_max_mb": 1024,
+  "models": [
+    { "type": "whisper", "model_path": "models/whisper/ggml-large-v3-turbo.bin", "use_gpu": true },
+    { "type": "gigaam", "model_path": "models/gigaam-v3-ctc-ru", "use_gpu": true },
+    { "type": "parakeet", "model_path": "models/parakeet-tdt-0.6b-v3-int8", "use_gpu": true }
+  ]
 }

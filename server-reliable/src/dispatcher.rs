@@ -4,13 +4,13 @@
 //! prev_tail update, send to client) is serialized per session+source via a
 //! per-session finalize queue keyed by monotonic sequence number.
 
-use crate::gigaam::GigaAM;
-use crate::hallucination;
+use crate::asr::{AsrModel, ModelOutput};
 use crate::llm_corrector::LlmCorrector;
 use crate::processor::{
     emit_status, wav_to_f32, ClientMessage, OutputSink, TranscribedEnd, WorkerState,
 };
-use crate::transcript_postprocess::{ensemble_merge, process_segment};
+use crate::overlap::merge_overlap;
+use crate::transcript_postprocess::ensemble_merge_n;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BinaryHeap;
@@ -18,11 +18,11 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Instant;
 use tracing::info;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
 
 const CONTEXT_LINES: usize = 5;
 
@@ -88,8 +88,7 @@ impl Ord for AsrTask {
 /// Raw ASR output (before merge_overlap), queued for ordered finalization.
 struct AsrOutput {
     text: String,
-    whisper_text: String,
-    gigaam_text: String,
+    model_outputs: Vec<ModelOutput>,
     duration_sec: f64,
     start_sec: f64,
     end_sec: f64,
@@ -165,8 +164,7 @@ struct AsrInner {
 
 impl AsrDispatcher {
     pub fn new(
-        context: Arc<WhisperContext>,
-        gigaam: Option<Arc<GigaAM>>,
+        models: Vec<Arc<dyn AsrModel>>,
         llm_dispatcher: Option<Arc<LlmDispatcher>>,
         num_workers: usize,
     ) -> Self {
@@ -179,24 +177,12 @@ impl AsrDispatcher {
 
         let workers = (0..num_workers.max(1))
             .map(|_| {
-                let context = Arc::clone(&context);
-                let gigaam = gigaam.clone();
+                let models = models.clone();
                 let llm_dispatcher = llm_dispatcher.clone();
                 let inner = Arc::clone(&inner);
                 let condvar = Arc::clone(&condvar);
-                let state = context
-                    .create_state()
-                    .expect("create WhisperState");
-                let state = Arc::new(Mutex::new(state));
                 thread::spawn(move || {
-                    Self::worker_loop(
-                        state,
-                        context,
-                        gigaam,
-                        llm_dispatcher,
-                        &inner,
-                        &condvar,
-                    );
+                    Self::worker_loop(models, llm_dispatcher, &inner, &condvar);
                 })
             })
             .collect();
@@ -209,9 +195,7 @@ impl AsrDispatcher {
     }
 
     fn worker_loop(
-        whisper_state: Arc<Mutex<WhisperState>>,
-        _context: Arc<WhisperContext>,
-        gigaam: Option<Arc<GigaAM>>,
+        models: Vec<Arc<dyn AsrModel>>,
         llm_dispatcher: Option<Arc<LlmDispatcher>>,
         inner: &Arc<Mutex<AsrInner>>,
         condvar: &Arc<std::sync::Condvar>,
@@ -248,7 +232,11 @@ impl AsrDispatcher {
                 st.queue_len[source_id as usize] =
                     st.queue_len[source_id as usize].saturating_sub(1);
             }
-            emit_status(&handle.worker_state, &handle.output_sink, "ggml-whisper");
+            let device_name = models
+                .first()
+                .map(|m| m.name())
+                .unwrap_or("asr");
+            emit_status(&handle.worker_state, &handle.output_sink, device_name);
 
             info!(
                 "processing src{} seq{}: {}",
@@ -257,7 +245,7 @@ impl AsrDispatcher {
                 wav_path.file_name().unwrap_or_default().to_string_lossy()
             );
 
-            // --- Stage 1: ASR inference (parallel, the slow part) ---
+            // --- Stage 1: ASR inference (parallel across models if 2+) ---
             let asr_output = (|| -> anyhow::Result<Option<AsrOutput>> {
                 if !wav_path.is_file() {
                     return Ok(None);
@@ -268,90 +256,60 @@ impl AsrDispatcher {
                 }
                 let duration_sec = samples.len() as f64 / 16000.0;
                 let t0 = Instant::now();
+                let language = &handle.language;
 
-                let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-                params.set_print_progress(false);
-                params.set_print_realtime(false);
-                params.set_print_timestamps(false);
-                params.set_single_segment(true);
-                params.set_no_speech_thold(0.6);
-                params.set_suppress_non_speech_tokens(true);
-                if !handle.language.is_empty() && handle.language != "auto" {
-                    params.set_language(Some(handle.language.as_str()));
-                }
-
-                let (whisper_text, gigaam_text) = if let Some(ref g) = gigaam {
-                    let state_clone = Arc::clone(&whisper_state);
-                    let samples_clone = samples.clone();
-                    let wav_clone = wav_path.clone();
-                    let lang = handle.language.clone();
-                    let h_whisper = thread::spawn(move || -> anyhow::Result<String> {
-                        let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-                        p.set_print_progress(false);
-                        p.set_print_realtime(false);
-                        p.set_print_timestamps(false);
-                        p.set_single_segment(true);
-                        p.set_no_speech_thold(0.6);
-                        p.set_suppress_non_speech_tokens(true);
-                        if !lang.is_empty() && lang != "auto" {
-                            p.set_language(Some(lang.as_str()));
-                        }
-                        let mut st = state_clone.lock().map_err(|_| anyhow::anyhow!("lock"))?;
-                        st.full(p, &samples_clone)
-                            .map_err(|e| anyhow::anyhow!("whisper full: {:?}", e))?;
-                        let n = st
-                            .full_n_segments()
-                            .map_err(|e| anyhow::anyhow!("full_n_segments: {:?}", e))?;
-                        let mut out = String::new();
-                        for i in 0..n {
-                            if let Ok(seg) = st.full_get_segment_text(i) {
-                                out.push_str(&seg);
-                            }
-                        }
-                        Ok(out)
-                    });
-                    let gigaam_clone = Arc::clone(g);
-                    let h_gigaam = thread::spawn(move || gigaam_clone.transcribe(&wav_clone));
-                    let w = h_whisper
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("whisper panic"))??;
-                    let gg = h_gigaam
-                        .join()
-                        .map_err(|_| anyhow::anyhow!("gigaam panic"))
-                        .unwrap_or(Ok(String::new()))?;
-                    (w, gg)
+                let model_outputs: Vec<ModelOutput> = if models.len() == 1 {
+                    let m = &models[0];
+                    let raw = m.transcribe(&wav_path, &samples, language)?;
+                    let filtered = m.filter_hallucinations(&raw);
+                    vec![ModelOutput {
+                        model_name: m.name().to_string(),
+                        text: filtered,
+                    }]
                 } else {
-                    let mut st = whisper_state.lock().map_err(|_| anyhow::anyhow!("lock"))?;
-                    st.full(params, &samples)
-                        .map_err(|e| anyhow::anyhow!("whisper full: {:?}", e))?;
-                    let n = st
-                        .full_n_segments()
-                        .map_err(|e| anyhow::anyhow!("full_n_segments: {:?}", e))?;
-                    let mut out = String::new();
-                    for i in 0..n {
-                        if let Ok(seg) = st.full_get_segment_text(i) {
-                            out.push_str(&seg);
-                        }
+                    let handles: Vec<_> = models
+                        .iter()
+                        .map(|m| {
+                            let m = Arc::clone(m);
+                            let wav = wav_path.clone();
+                            let samp = samples.clone();
+                            let lang = language.clone();
+                            thread::spawn(move || {
+                                let raw = m.transcribe(&wav, &samp, &lang)?;
+                                let filtered = m.filter_hallucinations(&raw);
+                                Ok::<_, anyhow::Error>(ModelOutput {
+                                    model_name: m.name().to_string(),
+                                    text: filtered,
+                                })
+                            })
+                        })
+                        .collect();
+                    let mut outputs = Vec::with_capacity(handles.len());
+                    for h in handles {
+                        let out = h
+                            .join()
+                            .map_err(|_| anyhow::anyhow!("model thread panic"))??;
+                        outputs.push(out);
                     }
-                    (out, String::new())
+                    outputs
                 };
 
-                let whisper_text = whisper_text.trim().to_string();
-                let whisper_text = hallucination::filter_whisper(&whisper_text);
+                let text = if llm_dispatcher.is_some() {
+                    let texts: Vec<&str> = model_outputs.iter().map(|o| o.text.as_str()).collect();
+                    ensemble_merge_n(&texts)
+                } else {
+                    model_outputs
+                        .iter()
+                        .find(|o| !o.text.is_empty())
+                        .map(|o| o.text.clone())
+                        .unwrap_or_default()
+                };
 
                 let elapsed = t0.elapsed().as_secs_f64();
                 {
                     let mut st = handle.worker_state.lock().unwrap();
                     st.last_proc_sec[source_id as usize] = elapsed;
                 }
-
-                let gigaam_filtered =
-                    hallucination::filter_gigaam(&gigaam_text.trim().to_string());
-                let text = if gigaam.is_some() && !gigaam_filtered.is_empty() {
-                    ensemble_merge(&whisper_text, &gigaam_filtered)
-                } else {
-                    whisper_text.clone()
-                };
 
                 if text.is_empty() {
                     info!(
@@ -389,8 +347,7 @@ impl AsrDispatcher {
 
                 Ok(Some(AsrOutput {
                     text,
-                    whisper_text,
-                    gigaam_text: gigaam_filtered,
+                    model_outputs,
                     duration_sec,
                     start_sec,
                     end_sec,
@@ -405,7 +362,7 @@ impl AsrDispatcher {
                 let mut st = handle.worker_state.lock().unwrap();
                 st.worker_busy[source_id as usize] = false;
             }
-            emit_status(&handle.worker_state, &handle.output_sink, "ggml-whisper");
+            emit_status(&handle.worker_state, &handle.output_sink, device_name);
 
             // --- Stage 2: enqueue to finalize queue, then drain in order ---
             let pending = match asr_output {
@@ -449,73 +406,75 @@ impl AsrDispatcher {
             };
 
             let Some(out) = pending.output else {
-                // No speech / error: just advance sequence
                 handle.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
                 continue;
             };
 
-            // merge_overlap with prev_tail (sequential, no race)
-            let prev_tail = {
-                let st = handle.worker_state.lock().unwrap();
-                st.prev_tail[si].clone()
-            };
-
-            let (merged, new_tail) = process_segment(&prev_tail, &out.text);
             {
                 let mut st = handle.worker_state.lock().unwrap();
-                st.prev_tail[si] = new_tail;
                 st.last_audio_sec[si] = out.duration_sec;
-            }
-
-            if merged.is_empty() {
-                handle.transcribed_end.set(source_id, out.end_sec);
-                let _ = std::fs::remove_file(&out.wav_path);
-                let _ = std::fs::remove_file(&out.meta_path);
-                handle.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
-                continue;
-            }
-
-            let context_snapshot = {
-                let st = handle.worker_state.lock().unwrap();
-                let ctx = &st.context_lines[si];
-                if ctx.is_empty() {
-                    "(нет)".to_string()
-                } else {
-                    ctx.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" | ")
-                }
-            };
-
-            {
-                let mut st = handle.worker_state.lock().unwrap();
-                let ctx = &mut st.context_lines[si];
-                ctx.push_back(merged.clone());
-                while ctx.len() > CONTEXT_LINES {
-                    ctx.pop_front();
-                }
-            }
-
-            let asr = crate::processor::AsrResult {
-                whisper_text: out.whisper_text.clone(),
-                gigaam_text: out.gigaam_text.clone(),
-                merged_text: merged.clone(),
-                start_sec: out.start_sec,
-                end_sec: out.end_sec,
-                source_id,
-                seg_id: out.seg_id.clone(),
-            };
-
-            let asr_path = out.wav_path.with_extension("asr.json");
-            if let Ok(js) = serde_json::to_string_pretty(&asr) {
-                let _ = std::fs::write(&asr_path, js);
             }
 
             handle.transcribed_end.set(source_id, out.end_sec);
 
-            if let Some(ref disp) = llm_dispatcher {
+            if llm_dispatcher.is_some() {
+                // --- LLM path: send raw text + prev_tail to LLM for smart merge/dedup/correction ---
+                let raw_text = out.text.trim().to_string();
+
+                let has_any_text = !raw_text.is_empty()
+                    || out.model_outputs.iter().any(|o| !o.text.is_empty());
+                if !has_any_text {
+                    let _ = std::fs::remove_file(&out.wav_path);
+                    let _ = std::fs::remove_file(&out.meta_path);
+                    handle.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
+                    continue;
+                }
+
+                let prev_tail = {
+                    let st = handle.worker_state.lock().unwrap();
+                    st.prev_tail[si].clone()
+                };
+
+                let context_snapshot = {
+                    let st = handle.worker_state.lock().unwrap();
+                    let ctx = &st.context_lines[si];
+                    if ctx.is_empty() {
+                        "(нет)".to_string()
+                    } else {
+                        ctx.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" | ")
+                    }
+                };
+
+                {
+                    let mut st = handle.worker_state.lock().unwrap();
+                    let ctx = &mut st.context_lines[si];
+                    ctx.push_back(raw_text.clone());
+                    while ctx.len() > CONTEXT_LINES {
+                        ctx.pop_front();
+                    }
+                }
+
+                let asr = crate::processor::AsrResult {
+                    model_outputs: out.model_outputs.clone(),
+                    merged_text: raw_text,
+                    start_sec: out.start_sec,
+                    end_sec: out.end_sec,
+                    source_id,
+                    seg_id: out.seg_id.clone(),
+                };
+
+                let asr_path = out.wav_path.with_extension("asr.json");
+                if let Ok(js) = serde_json::to_string_pretty(&asr) {
+                    let _ = std::fs::write(&asr_path, js);
+                }
+
+                let disp = llm_dispatcher.as_ref().unwrap();
                 handle.llm_inflight.fetch_add(1, AtomicOrdering::Relaxed);
                 let task = crate::processor::LlmTask {
                     asr,
                     context_snapshot,
+                    prev_tail,
+                    worker_state: Arc::clone(&handle.worker_state),
                     asr_path: asr_path.clone(),
                     wav_path: out.wav_path.clone(),
                     meta_path: out.meta_path.clone(),
@@ -524,20 +483,49 @@ impl AsrDispatcher {
                 };
                 disp.enqueue(task, handle.priority);
             } else {
-                let preview: String = merged.chars().take(80).collect();
-                info!(
-                    "transcribe src{}: {:.1}s -> {}",
-                    source_id, out.duration_sec, preview,
-                );
+                // --- Raw path: no overlap, no merge — send raw variants directly ---
+                let has_any_text = out.model_outputs.iter().any(|o| !o.text.is_empty());
+                if !has_any_text {
+                    let _ = std::fs::remove_file(&out.wav_path);
+                    let _ = std::fs::remove_file(&out.meta_path);
+                    handle.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
+                    continue;
+                }
+
+                let variants = if out.model_outputs.len() > 1 {
+                    Some(
+                        out.model_outputs
+                            .iter()
+                            .map(|o| crate::processor::TranscriptVariant {
+                                model: o.model_name.clone(),
+                                text: o.text.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
+                let text = if variants.is_some() {
+                    String::new()
+                } else {
+                    out.model_outputs.first().map(|o| o.text.clone()).unwrap_or_default()
+                };
+                let preview = out.model_outputs.iter()
+                    .find(|o| !o.text.is_empty())
+                    .map(|o| o.text.chars().take(80).collect::<String>())
+                    .unwrap_or_default();
+                info!("transcribe src{}: {:.1}s -> {}", source_id, out.duration_sec, preview);
+
                 handle.output_sink.send(&ClientMessage::Transcript {
-                    text: merged,
+                    text,
                     source: source_id,
                     start_sec: out.start_sec,
                     end_sec: out.end_sec,
+                    seg_id: out.seg_id.clone(),
+                    variants,
                 });
                 let _ = std::fs::remove_file(&out.wav_path);
                 let _ = std::fs::remove_file(&out.meta_path);
-                let _ = std::fs::remove_file(&asr_path);
             }
 
             handle.pending_count.fetch_sub(1, AtomicOrdering::Relaxed);
@@ -705,6 +693,8 @@ impl LlmDispatcher {
             let crate::processor::LlmTask {
                 asr,
                 context_snapshot,
+                prev_tail,
+                worker_state,
                 asr_path,
                 wav_path,
                 meta_path,
@@ -712,13 +702,12 @@ impl LlmDispatcher {
                 llm_inflight,
             } = task.task;
 
-            let final_text = match llm.correct(
-                &asr.whisper_text,
-                &asr.gigaam_text,
+            let corrected = match llm.correct(
+                &asr.model_outputs,
                 &asr.merged_text,
                 &context_snapshot,
             ) {
-                Some(corrected) => corrected,
+                Some(t) => t,
                 None => {
                     tracing::debug!(
                         "LLM correction failed for {}, using merged as fallback",
@@ -728,12 +717,23 @@ impl LlmDispatcher {
                 }
             };
 
-            output_sink.send(&ClientMessage::Transcript {
-                text: final_text,
-                source: asr.source_id,
-                start_sec: asr.start_sec,
-                end_sec: asr.end_sec,
-            });
+            let (emit, new_tail) = merge_overlap(&prev_tail, &corrected);
+
+            {
+                let mut st = worker_state.lock().unwrap();
+                st.prev_tail[asr.source_id as usize] = new_tail;
+            }
+
+            if !emit.is_empty() {
+                output_sink.send(&ClientMessage::Transcript {
+                    text: emit,
+                    source: asr.source_id,
+                    start_sec: asr.start_sec,
+                    end_sec: asr.end_sec,
+                    seg_id: asr.seg_id.clone(),
+                    variants: None,
+                });
+            }
 
             let _ = std::fs::remove_file(&wav_path);
             let _ = std::fs::remove_file(&meta_path);

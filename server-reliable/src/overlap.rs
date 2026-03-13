@@ -1,6 +1,15 @@
 //! Text overlap merging at chunk boundaries.
 
-const TAIL_WORDS: usize = 10;
+const TAIL_WORDS: usize = 15;
+
+fn words_match(prev_suffix: &[&str], new_prefix: &[&str]) -> bool {
+    prev_suffix.len() == new_prefix.len()
+        && prev_suffix.iter().zip(new_prefix.iter()).all(|(a, b)| {
+            let a = a.trim_matches(|c: char| ",.!?;:".contains(c));
+            let b = b.trim_matches(|c: char| ",.!?;:".contains(c));
+            !a.is_empty() && !b.is_empty() && a.to_lowercase() == b.to_lowercase()
+        })
+}
 
 /// Remove duplication at chunk boundaries.
 /// Returns (merged_text_to_emit, new_tail for next iteration).
@@ -52,13 +61,13 @@ pub fn merge_overlap(prev_tail: &str, new_text: &str) -> (String, String) {
         return (merged, tail);
     }
 
-    // 2) Exact word overlap (longest match first)
+    // 2) Word overlap (longest match first, case-insensitive, punctuation-ignoring)
     let n_max = prev_words.len().min(new_words.len());
     let mut best_len = 0usize;
     for n in (1..=n_max).rev() {
-        let prev_suffix: String = prev_words[prev_words.len() - n..].join(" ");
-        let new_prefix: String = new_words[..n].join(" ");
-        if prev_suffix == new_prefix {
+        let prev_suffix = &prev_words[prev_words.len() - n..];
+        let new_prefix = &new_words[..n];
+        if words_match(prev_suffix, new_prefix) {
             best_len = n;
             break;
         }

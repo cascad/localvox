@@ -1,9 +1,9 @@
 //! Reliable disk-buffered transcription WebSocket server (Rust + GGML Whisper).
 
+mod asr;
 mod audio_writer;
 mod config;
 mod dispatcher;
-mod gigaam;
 mod hallucination;
 mod llm_corrector;
 mod overlap;
@@ -155,7 +155,7 @@ fn scan_session_lag(
             }
         }
         if let Ok(m) = entry.metadata() {
-            if m.is_file() {
+            if m.is_file() && name.ends_with(".wav") {
                 dir_size_bytes += m.len();
             }
         }
@@ -424,39 +424,24 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     let settings = config::load_settings(args.model.as_deref())?;
-    let model_path = settings
-        .model_path
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("model_path required in settings or --model"))?;
 
-    info!("Loading Whisper: {} (use_gpu: {})", model_path, settings.use_gpu);
     add_cuda_to_path(&settings);
-    let context = processor::load_whisper(model_path, settings.use_gpu)?;
+    let models = asr::load_models(&settings)?;
+    if models.is_empty() {
+        anyhow::bail!(
+            "No ASR models configured. Set model_path (legacy) or models array in settings.json"
+        );
+    }
     whisper_rs::print_system_info();
-    let context = Arc::new(context);
-    info!("Model loaded (check stderr above for CUBLAS/GPU — if CUBLAS=0, GPU not used)");
 
-    let gigaam: Option<Arc<gigaam::GigaAM>> = if settings.ensemble_enabled {
-        if let Some(dir) = settings.gigaam_model_dir.as_ref().filter(|s| !s.trim().is_empty()) {
-            let path = std::path::Path::new(dir);
-            match gigaam::GigaAM::new(path) {
-                Ok(g) => {
-                    info!("GigaAM ensemble enabled: {}", dir);
-                    Some(Arc::new(g))
-                }
-                Err(e) => {
-                    tracing::warn!("GigaAM load failed (ensemble disabled): {}", e);
-                    None
-                }
-            }
-        } else {
-            tracing::warn!("ensemble_enabled but gigaam_model_dir not set");
-            None
-        }
-    } else {
-        None
-    };
+    // Таблица: модель → CPU/GPU
+    let name_w = models.iter().map(|m| m.name().len()).max().unwrap_or(8).max(6);
+    info!("ASR модели (кто на чём):");
+    info!("  {:<name_w$} | Через", "Модель", name_w = name_w);
+    info!("  {:-<name_w$}-+-------", "", name_w = name_w);
+    for m in &models {
+        info!("  {:<name_w$} | {}", m.name(), m.backend(), name_w = name_w);
+    }
 
     let llm_dispatcher: Option<Arc<dispatcher::LlmDispatcher>> =
         if settings.llm_correction_enabled {
@@ -480,8 +465,7 @@ async fn main() -> Result<()> {
         };
 
     let asr_dispatcher = Arc::new(dispatcher::AsrDispatcher::new(
-        context.clone(),
-        gigaam.clone(),
+        models,
         llm_dispatcher.clone(),
         settings.asr_workers,
     ));
@@ -763,14 +747,22 @@ fn msg_to_json(msg: &processor::ClientMessage) -> String {
             source,
             start_sec,
             end_sec,
-        } => serde_json::json!({
-            "type": "transcript",
-            "text": text,
-            "source": source,
-            "start_sec": start_sec,
-            "end_sec": end_sec
-        })
-        .to_string(),
+            seg_id,
+            variants,
+        } => {
+            let mut j = serde_json::json!({
+                "type": "transcript",
+                "text": text,
+                "source": source,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "seg_id": seg_id
+            });
+            if let Some(ref v) = variants {
+                j["variants"] = serde_json::to_value(v).unwrap_or_default();
+            }
+            j.to_string()
+        }
         processor::ClientMessage::Status(v) => v.to_string(),
         processor::ClientMessage::Done => serde_json::json!({"type": "done"}).to_string(),
     }

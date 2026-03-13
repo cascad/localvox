@@ -67,6 +67,69 @@ fn key_matches(key: KeyCode, expected: char) -> bool {
     }
 }
 
+/// Parse transcript file for SEGMENT blocks, filter by start/end seg_id, write to export_path.
+/// Returns number of segments exported.
+fn export_trimmed_transcript(
+    transcript_path: &str,
+    export_path: &std::path::Path,
+    start_seg_id: &Option<String>,
+    end_seg_id: &Option<String>,
+) -> Result<usize> {
+    let content = std::fs::read_to_string(transcript_path)
+        .with_context(|| format!("Не удалось прочитать {}", transcript_path))?;
+    let mut segments: Vec<(String, String, Vec<String>)> = Vec::new();
+    let mut lines = content.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("=== SEGMENT ") {
+            let header = line.to_string();
+            let seg_id = trimmed
+                .strip_prefix("=== SEGMENT ")
+                .and_then(|r| r.split('|').next())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            let mut block = Vec::new();
+            while let Some(l) = lines.next() {
+                let t = l.trim();
+                if t.starts_with("=== END SEGMENT") {
+                    break;
+                }
+                block.push(l.to_string());
+            }
+            segments.push((seg_id, header, block));
+        }
+    }
+    let (from, to) = if segments.is_empty() {
+        (0, 0)
+    } else {
+        let from = start_seg_id.as_ref().and_then(|s| {
+            segments.iter().position(|(id, _, _)| id == s)
+        }).unwrap_or(0);
+        let to = end_seg_id.as_ref().and_then(|s| {
+            segments.iter().rposition(|(id, _, _)| id == s)
+        }).unwrap_or(segments.len() - 1);
+        if from > to {
+            (0, 0)
+        } else {
+            (from, to)
+        }
+    };
+    let mut out = std::fs::File::create(export_path)
+        .with_context(|| format!("Не удалось создать {}", export_path.display()))?;
+    let mut count = 0;
+    for (seg_id, header, block) in segments.iter().take(to + 1).skip(from) {
+        let _ = writeln!(out, "{}", header);
+        for l in block {
+            let _ = writeln!(out, "{}", l);
+        }
+        let _ = writeln!(out, "=== END SEGMENT {} ===", seg_id);
+        let _ = writeln!(out, "");
+        count += 1;
+    }
+    out.flush()?;
+    Ok(count)
+}
+
 // ── Config file ──────────────────────────────────────────────────────
 
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
@@ -562,6 +625,12 @@ fn resample(src: &[f32], src_rate: u32) -> Vec<f32> {
 // ── Threads ──────────────────────────────────────────────────────────
 
 #[derive(Deserialize, Debug, Clone)]
+struct TranscriptVariant {
+    model: String,
+    text: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum ServerMessage {
@@ -569,6 +638,14 @@ enum ServerMessage {
         text: String,
         #[serde(default)]
         source: Option<u8>,
+        #[serde(default)]
+        start_sec: Option<f64>,
+        #[serde(default)]
+        end_sec: Option<f64>,
+        #[serde(default)]
+        seg_id: Option<String>,
+        #[serde(default)]
+        variants: Option<Vec<TranscriptVariant>>,
     },
     Status(StatusData),
     Debug { text: String },
@@ -1124,7 +1201,7 @@ fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut transcript_lines: Vec<(String, Option<u8>)> = Vec::new();
+    let mut transcript_lines: Vec<(String, Option<u8>, Option<String>)> = Vec::new();
     let mut debug_lines: Vec<String> = Vec::new();
     let mut audio_level: f32 = 0.0;
     let mut audio_level2: f32 = 0.0;
@@ -1144,6 +1221,12 @@ fn run_tui(
     let mut debug_scroll: Option<u16> = None;
     let mut need_restart = false;
     let mut restart_at: Option<Instant> = None;
+    let mut meeting_start_seg_id: Option<String> = None;
+    let mut meeting_end_seg_id: Option<String> = None;
+    let mut export_msg: Option<(String, Instant)> = None;
+    let mut last_t_inner_w: usize = 80;
+    let mut last_t_scroll_y: u16 = 0;
+    let mut last_t_visible: u16 = 0;
 
     let mut out_file = std::fs::OpenOptions::new()
         .create(true)
@@ -1153,6 +1236,11 @@ fn run_tui(
     let mut last_draw = Instant::now();
 
     loop {
+        if let Some((_, at)) = &export_msg {
+            if at.elapsed() >= Duration::from_secs(3) {
+                export_msg = None;
+            }
+        }
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) if key.kind == crossterm::event::KeyEventKind::Press => {
@@ -1268,6 +1356,67 @@ fn run_tui(
                             KeyCode::Home => {
                                 if focus == 0 { transcript_scroll = Some(0); } else { debug_scroll = Some(0); }
                             }
+                            code if focus == 0 && key_matches(code, '1') => {
+                                // Mark meeting start: segment at top of view, or first
+                                let inner_w = last_t_inner_w.max(1);
+                                let mut row = 0u16;
+                                let mut idx = 0;
+                                for (i, (l, src, _)) in transcript_lines.iter().enumerate() {
+                                    let pl = match *src { Some(0)|Some(1) => 4, _ => 0 };
+                                    let w = pl + l.chars().count();
+                                    let h = if w == 0 { 1 } else { ((w + inner_w - 1) / inner_w) as u16 };
+                                    if row + h > last_t_scroll_y {
+                                        idx = i;
+                                        break;
+                                    }
+                                    row += h;
+                                    idx = i;
+                                }
+                                if let Some((_, _, sid)) = transcript_lines.get(idx) {
+                                    if let Some(s) = sid {
+                                        meeting_start_seg_id = Some(s.clone());
+                                        export_msg = Some((format!("Начало: {}", s), Instant::now()));
+                                    }
+                                }
+                            }
+                            code if focus == 0 && key_matches(code, '2') => {
+                                // Mark meeting end: segment at BOTTOM of view
+                                let inner_w = last_t_inner_w.max(1);
+                                let bottom_row = last_t_scroll_y.saturating_add(last_t_visible).saturating_sub(1);
+                                let mut row = 0u16;
+                                let mut idx = transcript_lines.len().saturating_sub(1);
+                                for (i, (l, src, _)) in transcript_lines.iter().enumerate() {
+                                    let pl = match *src { Some(0)|Some(1) => 4, _ => 0 };
+                                    let w = pl + l.chars().count();
+                                    let h = if w == 0 { 1 } else { ((w + inner_w - 1) / inner_w) as u16 };
+                                    if row + h > bottom_row {
+                                        idx = i;
+                                        break;
+                                    }
+                                    row += h;
+                                    idx = i;
+                                }
+                                if let Some((_, _, sid)) = transcript_lines.get(idx) {
+                                    if let Some(s) = sid {
+                                        meeting_end_seg_id = Some(s.clone());
+                                        export_msg = Some((format!("Конец: {}", s), Instant::now()));
+                                    }
+                                }
+                            }
+                            code if focus == 0 && key_matches(code, 'c') => {
+                                meeting_start_seg_id = None;
+                                meeting_end_seg_id = None;
+                                export_msg = Some(("Маркеры сброшены".into(), Instant::now()));
+                            }
+                            code if focus == 0 && key_matches(code, 'e') => {
+                                // Export trimmed transcript to meeting_export.txt
+                                let out_dir = std::path::Path::new(output_path).parent().unwrap_or(std::path::Path::new("."));
+                                let export_path = out_dir.join("meeting_export.txt");
+                                match export_trimmed_transcript(output_path, &export_path, &meeting_start_seg_id, &meeting_end_seg_id) {
+                                    Ok(n) => export_msg = Some((format!("Экспорт: {} сегментов → {}", n, export_path.display()), Instant::now())),
+                                    Err(e) => export_msg = Some((format!("Ошибка экспорта: {}", e), Instant::now())),
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1300,20 +1449,50 @@ fn run_tui(
 
         while let Ok(ev) = ui_rx.try_recv() {
             match ev {
-                UiEvent::Server(ServerMessage::Transcript { text, source }) => {
+                UiEvent::Server(ServerMessage::Transcript { text, source, start_sec, end_sec, seg_id, variants }) => {
                     last_activity = Instant::now();
-                    transcript_lines.push((text.clone(), source));
-                    transcript_scroll = None;
-                    if recording {
-                        let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-                        let prefix = match source {
-                            Some(0) => "mic: ",
-                            Some(1) => "sys: ",
-                            _ => "",
-                        };
-                        let _ = writeln!(out_file, "[{ts}] {prefix}{text}");
-                        let _ = out_file.flush();
+                    if let Some(ref v) = variants {
+                        if !text.is_empty() {
+                            transcript_lines.push((text.clone(), source, seg_id.clone()));
+                        }
+                        for vv in v {
+                            let line = format!("  [{}] {}", vv.model, vv.text);
+                            transcript_lines.push((line, source, seg_id.clone()));
+                        }
+                        if recording {
+                            let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+                            let src_label = match source {
+                                Some(0) => "mic",
+                                Some(1) => "sys",
+                                _ => "src",
+                            };
+                            let time_range = match (start_sec, end_sec) {
+                                (Some(s), Some(e)) => format!("{:.1}s–{:.1}s", s, e),
+                                _ => "?".to_string(),
+                            };
+                            let sid = seg_id.as_deref().unwrap_or("?");
+                            let _ = writeln!(out_file, "");
+                            let _ = writeln!(out_file, "=== SEGMENT {} | {} | {} | {} ===", sid, time_range, src_label, ts);
+                            for vv in v {
+                                let _ = writeln!(out_file, "  {}: {}", vv.model, vv.text);
+                            }
+                            let _ = writeln!(out_file, "=== END SEGMENT {} ===", sid);
+                            let _ = out_file.flush();
+                        }
+                    } else {
+                        transcript_lines.push((text.clone(), source, seg_id.clone()));
+                        if recording {
+                            let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
+                            let prefix = match source {
+                                Some(0) => "mic: ",
+                                Some(1) => "sys: ",
+                                _ => "",
+                            };
+                            let _ = writeln!(out_file, "[{ts}] {prefix}{text}");
+                            let _ = out_file.flush();
+                        }
                     }
+                    transcript_scroll = None;
                     if transcript_lines.len() > 500 {
                         transcript_lines.drain(..transcript_lines.len() - 500);
                     }
@@ -1495,9 +1674,23 @@ fn run_tui(
                 Span::styled(&last_str, Style::default().fg(Color::Magenta)),
                 Span::raw("  "),
                 Span::styled("[r] [F2] [q]", Style::default().fg(Color::DarkGray)),
+                Span::raw("  "),
+                Span::styled("[1][2][e][c]", Style::default().fg(Color::DarkGray)),
             ]);
 
-            let status_widget = Paragraph::new(vec![line1])
+            let mut status_lines = vec![line1];
+            if let Some((ref msg, at)) = export_msg {
+                if at.elapsed() < Duration::from_secs(3) {
+                    status_lines.push(Line::from(Span::styled(msg.as_str(), Style::default().fg(Color::Green))));
+                }
+            } else if meeting_start_seg_id.is_some() || meeting_end_seg_id.is_some() {
+                let m = format!("встреча: {} … {}",
+                    meeting_start_seg_id.as_deref().unwrap_or("—"),
+                    meeting_end_seg_id.as_deref().unwrap_or("—"));
+                status_lines.push(Line::from(Span::styled(m, Style::default().fg(Color::Yellow))));
+            }
+
+            let status_widget = Paragraph::new(status_lines)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
@@ -1507,9 +1700,10 @@ fn run_tui(
             f.render_widget(status_widget, chunks[0]);
 
             let t_inner_w = chunks[1].width.saturating_sub(2).max(1) as usize;
+            last_t_inner_w = t_inner_w;
             let t_total: u16 = transcript_lines
                 .iter()
-                .map(|(l, src)| {
+                .map(|(l, src, _)| {
                     let prefix_len = match *src {
                         Some(0) | Some(1) => 4, // "mic " / "sys "
                         _ => 0,
@@ -1519,32 +1713,75 @@ fn run_tui(
                 })
                 .sum();
             let t_visible = chunks[1].height.saturating_sub(2);
+            last_t_visible = t_visible;
             let t_max = t_total.saturating_sub(t_visible);
             let t_scroll_y = match transcript_scroll {
                 None => t_max,
                 Some(v) => v.min(t_max),
             };
+            last_t_scroll_y = t_scroll_y;
             if let Some(ref mut v) = transcript_scroll {
                 *v = (*v).min(t_max);
             } else {
                 transcript_scroll = Some(t_max);
             }
 
-            let t_title = if focus == 0 { "Транскрипция ◄" } else { "Транскрипция" };
+            // [1] = сегмент верхней строки, [2] = сегмент нижней строки
+            let mut row = 0u16;
+            let mut top_line_idx = 0;
+            let mut bottom_line_idx = transcript_lines.len().saturating_sub(1);
+            let bottom_row = t_scroll_y.saturating_add(t_visible).saturating_sub(1);
+            let mut top_set = false;
+            for (i, (l, src, _)) in transcript_lines.iter().enumerate() {
+                let pl = match *src { Some(0)|Some(1) => 4, _ => 0 };
+                let w = pl + l.chars().count();
+                let h = if w == 0 { 1 } else { ((w + t_inner_w - 1) / t_inner_w) as u16 };
+                if !top_set && row + h > t_scroll_y {
+                    top_line_idx = i;
+                    top_set = true;
+                }
+                if row + h > bottom_row {
+                    bottom_line_idx = i;
+                    break;
+                }
+                row += h;
+                bottom_line_idx = i;
+            }
+
+            let t_title = if focus == 0 {
+                "Транскрипция ◄  [1] нач ↑ [2] кон ↓"
+            } else {
+                "Транскрипция"
+            };
             let t_border = if focus == 0 { Color::Yellow } else { Color::Reset };
             let t_lines: Vec<Line> = transcript_lines
                 .iter()
-                .map(|(text, source)| {
+                .enumerate()
+                .map(|(i, (text, source, seg_id))| {
                     let (prefix, color) = match *source {
                         Some(0) => ("mic ", Color::Green),
                         Some(1) => ("sys ", Color::Cyan),
                         _ => ("", Color::White),
                     };
                     let mut spans = vec![];
+                    let is_top = focus == 0 && i == top_line_idx;
+                    let is_bottom = focus == 0 && i == bottom_line_idx;
+                    if is_top {
+                        spans.push(Span::styled("► ", Style::default().fg(Color::Yellow)));
+                    } else if is_bottom {
+                        spans.push(Span::styled("▼ ", Style::default().fg(Color::Yellow)));
+                    }
                     if !prefix.is_empty() {
                         spans.push(Span::styled(prefix, Style::default().fg(color).add_modifier(Modifier::DIM)));
                     }
-                    spans.push(Span::styled(text.as_str(), Style::default().fg(color)));
+                    let is_start = seg_id.as_ref() == meeting_start_seg_id.as_ref();
+                    let is_end = seg_id.as_ref() == meeting_end_seg_id.as_ref();
+                    let text_style = if is_start || is_end {
+                        Style::default().fg(color).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(color)
+                    };
+                    spans.push(Span::styled(text.as_str(), text_style));
                     Line::from(spans)
                 })
                 .collect();
@@ -1858,9 +2095,10 @@ mod tests {
         let json = r#"{"type":"transcript","text":"привет","source":0}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match &msg {
-            ServerMessage::Transcript { text, source } => {
+            ServerMessage::Transcript { text, source, variants, .. } => {
                 assert_eq!(text, "привет");
                 assert_eq!(*source, Some(0));
+                assert!(variants.is_none());
             }
             _ => panic!("expected Transcript"),
         }
@@ -1884,5 +2122,39 @@ mod tests {
             ServerMessage::Error { text } => assert_eq!(text, "err"),
             _ => panic!("expected Error"),
         }
+    }
+
+    #[test]
+    fn test_export_trimmed_transcript() {
+        let dir = std::env::temp_dir().join("localvox_export_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let transcript = dir.join("transcript.txt");
+        let export = dir.join("meeting_export.txt");
+        let content = r#"=== SEGMENT src1_000001 | 0.0s–2.0s | sys | 2026-03-12 23:05:04 ===
+  whisper: hello
+  gigaam: hello
+=== END SEGMENT src1_000001 ===
+
+=== SEGMENT src1_000002 | 2.0s–4.0s | sys | 2026-03-12 23:05:06 ===
+  whisper: world
+=== END SEGMENT src1_000002 ===
+
+=== SEGMENT src1_000003 | 4.0s–6.0s | sys | 2026-03-12 23:05:08 ===
+  whisper: end
+=== END SEGMENT src1_000003 ===
+"#;
+        std::fs::write(&transcript, content).unwrap();
+        let n = export_trimmed_transcript(
+            transcript.to_str().unwrap(),
+            &export,
+            &Some("src1_000001".into()),
+            &Some("src1_000002".into()),
+        ).unwrap();
+        assert_eq!(n, 2);
+        let out = std::fs::read_to_string(&export).unwrap();
+        assert!(out.contains("hello"));
+        assert!(out.contains("world"));
+        assert!(!out.contains("end"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
