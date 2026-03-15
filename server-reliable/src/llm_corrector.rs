@@ -70,6 +70,14 @@ impl LlmCorrector {
         self.do_request(&prompt, merged_text)
     }
 
+    /// Stop sequences: галлюцинации LLM (титры субтитров, редактор/корректор).
+    const STOP_SUBTITLE_CREDITS: &[&str] = &[
+        "А.Семкин",
+        "Корректор А.Егорова",
+        "корректор А.Егорова",
+        "редактор субтитров",
+    ];
+
     fn do_request(&self, prompt: &str, merged_text: &str) -> Option<String> {
         let is_thinking_model = self.model.contains("3.5") || self.model.to_lowercase().contains("deepseek");
         let num_predict = merged_text.len().max(96).min(384);
@@ -80,6 +88,7 @@ impl LlmCorrector {
             "options": {
                 "temperature": 0.1,
                 "num_predict": num_predict,
+                "stop": Self::STOP_SUBTITLE_CREDITS,
             }
         });
         if is_thinking_model {
@@ -129,7 +138,7 @@ impl LlmCorrector {
         }
         if response_text.len() > merged_text.len() * 3 {
             let trunc_target = merged_text.len().max(50) * 2;
-            if let Some(truncated) = truncate_at_sentence_boundary(&response_text, trunc_target) {
+            if let Some((truncated, discarded)) = truncate_at_sentence_boundary(&response_text, trunc_target) {
                 if truncated.len() >= merged_text.len() / 2 {
                     tracing::warn!(
                         "LLM response truncated ({} → {} chars, input {} chars) after {:.1}s",
@@ -138,6 +147,10 @@ impl LlmCorrector {
                         merged_text.len(),
                         elapsed
                     );
+                    tracing::warn!("  [kept] {}", truncated);
+                    if !discarded.is_empty() {
+                        tracing::warn!("  [discarded] {}", discarded);
+                    }
                     return Some(truncated);
                 }
             }
@@ -157,9 +170,9 @@ impl LlmCorrector {
     }
 }
 
-fn truncate_at_sentence_boundary(text: &str, target_bytes: usize) -> Option<String> {
+fn truncate_at_sentence_boundary(text: &str, target_bytes: usize) -> Option<(String, String)> {
     if target_bytes >= text.len() {
-        return Some(text.to_string());
+        return Some((text.to_string(), String::new()));
     }
     let mut end = target_bytes;
     while end < text.len() && !text.is_char_boundary(end) {
@@ -175,10 +188,11 @@ fn truncate_at_sentence_boundary(text: &str, target_bytes: usize) -> Option<Stri
         .or_else(|| slice.rfind(' '))
         .unwrap_or(end);
     let result = text[..cut].trim();
+    let discarded = text[cut..].trim();
     if result.is_empty() {
         None
     } else {
-        Some(result.to_string())
+        Some((result.to_string(), discarded.to_string()))
     }
 }
 
@@ -191,11 +205,9 @@ fn strip_llm_reasoning(text: &str) -> String {
         "выбираем вариант",
         "вариант а (whisper)",
         "вариант б (gigaam)",
-        "вариант в (silero)",
         "вариант в (parakeet)",
         "вариант a (whisper)",
         "вариант b (gigaam)",
-        "вариант c (silero)",
         "вариант c (parakeet)",
         "variant a",
         "variant b",

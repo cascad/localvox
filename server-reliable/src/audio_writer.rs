@@ -25,7 +25,6 @@ struct SourceState {
     sample_rate: u32,
     max_chunk_sec: f64,
     min_chunk_sec: f64,
-    vad_silence_sec: f64,
     overlap_sec: f64,
     seq: u32,
     duration_sec: f64,
@@ -300,7 +299,6 @@ impl AudioWriter {
                     sample_rate: self.settings.sample_rate,
                     max_chunk_sec: self.settings.max_chunk_duration_sec,
                     min_chunk_sec: self.settings.min_chunk_duration_sec,
-                    vad_silence_sec: self.settings.vad_silence_sec,
                     overlap_sec: self.settings.overlap_sec,
                     seq,
                     duration_sec: 0.0,
@@ -366,7 +364,6 @@ impl AudioWriter {
                     sample_rate: self.settings.sample_rate,
                     max_chunk_sec: self.settings.max_chunk_duration_sec,
                     min_chunk_sec: self.settings.min_chunk_duration_sec,
-                    vad_silence_sec: self.settings.vad_silence_sec,
                     overlap_sec: self.settings.overlap_sec,
                     seq: 0,
                     duration_sec: 0.0,
@@ -407,9 +404,5 @@ impl AudioWriter {
 
     pub fn close(&mut self) -> Result<Vec<(PathBuf, u8)>, std::io::Error> {
         self.flush_all()
-    }
-
-    pub fn session_dir(&self) -> Option<&Path> {
-        self.session_dir.as_deref()
     }
 }

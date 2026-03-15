@@ -8,9 +8,10 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Deserialize)]
 pub struct ModelEntry {
     #[serde(rename = "type")]
-    pub model_type: String, // "whisper" | "gigaam" | "silero"
+    pub model_type: String, // "whisper" | "gigaam" | "parakeet"
     pub model_path: String,
     #[serde(default)]
+    #[allow(dead_code)] // For models that need token files (e.g. future ONNX models)
     pub tokens_path: Option<String>,
     #[serde(default)]
     pub use_gpu: Option<bool>,
@@ -316,13 +317,12 @@ mod tests {
 
     #[test]
     fn test_resolved_models_new() {
-        let json = r#"{"models": [{"type": "silero", "model_path": "/models/silero.onnx", "tokens_path": "/models/tokens.txt"}]}"#;
+        let json = r#"{"models": [{"type": "parakeet", "model_path": "/models/parakeet"}]}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         let models = s.resolved_models();
         assert_eq!(models.len(), 1);
-        assert_eq!(models[0].model_type, "silero");
-        assert_eq!(models[0].model_path, "/models/silero.onnx");
-        assert_eq!(models[0].tokens_path.as_deref(), Some("/models/tokens.txt"));
+        assert_eq!(models[0].model_type, "parakeet");
+        assert_eq!(models[0].model_path, "/models/parakeet");
     }
 }
 

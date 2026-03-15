@@ -1,9 +1,8 @@
-//! Modular ASR adapter system. Trait-based pluggable models (Whisper, GigaAM, Silero, etc.)
+//! Modular ASR adapter system. Trait-based pluggable models (Whisper, GigaAM, Parakeet, etc.)
 //! selected at runtime via config. Ensemble = 2+ models.
 
 mod gigaam;
 mod parakeet;
-mod silero;
 mod whisper;
 
 use anyhow::Result;
@@ -13,8 +12,8 @@ use std::sync::Arc;
 use crate::config::Settings;
 
 pub use gigaam::GigaAmAdapter;
+#[allow(unused_imports)] // Kept for when Parakeet is configured
 pub use parakeet::ParakeetAdapter;
-pub use silero::SileroAdapter;
 pub use whisper::WhisperAdapter;
 
 /// Output from a single ASR model. Used in AsrResult and for ensemble merge.
@@ -61,10 +60,6 @@ pub fn load_models(settings: &Settings) -> Result<Vec<Arc<dyn AsrModel>>> {
                 let use_gpu = entry.use_gpu.unwrap_or(settings.use_gpu);
                 Arc::new(parakeet::ParakeetAdapter::new(std::path::Path::new(&entry.model_path), use_gpu)?)
             }
-            "silero" => Arc::new(silero::SileroAdapter::new(
-                &entry.model_path,
-                entry.tokens_path.as_deref().unwrap_or(""),
-            )?),
             other => {
                 tracing::warn!("Unknown ASR model type '{}', skipping", other);
                 continue;

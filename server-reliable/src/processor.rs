@@ -82,11 +82,6 @@ impl OutputSink {
         }
     }
 
-    /// Restore seq counter (e.g. after reading existing transcript.jsonl on startup).
-    pub fn set_next_seq(&self, val: u64) {
-        self.next_seq.store(val, Ordering::Relaxed);
-    }
-
     /// For Transcript/Done: append to transcript.jsonl, then forward to client.
     pub fn send(&self, msg: &ClientMessage) {
         match msg {

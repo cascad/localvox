@@ -99,12 +99,6 @@ const GIGAAM_STRIP: &[(&str, bool)] = &[
     (", корректор а.егорова, ", false),
 ];
 
-/// Silero: отбрасываем весь сегмент. Пока пусто — добавлять по мере обнаружения.
-const SILERO_DROP: &[&str] = &[];
-
-/// Silero: вырезаем встроенные фразы.
-const SILERO_STRIP: &[(&str, bool)] = &[];
-
 /// Parakeet: отбрасываем весь сегмент при типичных галлюцинациях (короткие сегменты).
 /// Parakeet TDT 0.6B часто выдаёт случайные английские слова на тишине/шуме.
 /// yeah — самая частая галлюцинация (sherpa-onnx #3267), pinch — из практики.
@@ -121,11 +115,6 @@ const PARAKEET_STRIP: &[(&str, bool)] = &[];
 /// Фильтрует галлюцинации Parakeet.
 pub fn filter_parakeet(text: &str) -> String {
     apply_filter(text, PARAKEET_DROP, PARAKEET_STRIP)
-}
-
-/// Фильтрует галлюцинации Silero.
-pub fn filter_silero(text: &str) -> String {
-    apply_filter(text, SILERO_DROP, SILERO_STRIP)
 }
 
 /// Фильтрует галлюцинации Whisper.

@@ -137,10 +137,8 @@ impl Ord for LlmTaskWithPriority {
 }
 
 pub struct SessionHandle {
-    pub id: String,
     pub worker_state: Arc<Mutex<WorkerState>>,
     pub output_sink: Arc<OutputSink>,
-    pub session_dir: PathBuf,
     pub language: String,
     pub priority: Priority,
     pub transcribed_end: TranscribedEnd,
@@ -153,6 +151,7 @@ pub struct SessionHandle {
 pub struct AsrDispatcher {
     inner: Arc<Mutex<AsrInner>>,
     condvar: Arc<std::sync::Condvar>,
+    #[allow(dead_code)] // Holds thread handles; threads stay alive via ownership
     workers: Vec<thread::JoinHandle<()>>,
 }
 
@@ -538,12 +537,11 @@ impl AsrDispatcher {
         session_id: String,
         priority: Priority,
         output_sink: Arc<OutputSink>,
-        session_dir: PathBuf,
+        _session_dir: PathBuf,
         language: String,
     ) -> Arc<SessionHandle> {
         let transcribed_end = TranscribedEnd::default();
         let handle = Arc::new(SessionHandle {
-            id: session_id.clone(),
             worker_state: Arc::new(Mutex::new(WorkerState {
                 prev_tail: [String::new(), String::new()],
                 last_proc_sec: [0.0, 0.0],
@@ -553,7 +551,6 @@ impl AsrDispatcher {
                 context_lines: [VecDeque::new(), VecDeque::new()],
             })),
             output_sink,
-            session_dir,
             language,
             priority,
             transcribed_end: transcribed_end.clone(),
@@ -631,15 +628,12 @@ impl AsrDispatcher {
             .map(|h| h.pending_count.load(AtomicOrdering::Relaxed))
             .unwrap_or(0)
     }
-
-    pub fn unregister_session(&self, session_id: &str) {
-        self.inner.lock().unwrap().sessions.remove(session_id);
-    }
 }
 
 pub struct LlmDispatcher {
     inner: Arc<Mutex<LlmInner>>,
     condvar: Arc<std::sync::Condvar>,
+    #[allow(dead_code)] // Holds thread handles; threads stay alive via ownership
     workers: Vec<thread::JoinHandle<()>>,
 }
 

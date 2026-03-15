@@ -1,14 +1,5 @@
 //! Постобработка транскрипта: объединение сегментов, ансамбль, исправления.
 
-use crate::overlap::merge_overlap;
-
-/// Обрабатывает новый сегмент транскрипта с учётом хвоста предыдущего.
-/// Возвращает (текст для отправки клиенту, новый хвост для следующей итерации).
-pub fn process_segment(prev_tail: &str, new_text: &str) -> (String, String) {
-    let (merged, new_tail) = merge_overlap(prev_tail, new_text);
-    (merged, new_tail)
-}
-
 /// Word-level edit distance (Levenshtein) alignment between two word sequences.
 /// Returns aligned pairs: (Option<word_a>, Option<word_b>) — None means gap.
 fn align_words<'a>(words_a: &[&'a str], words_b: &[&'a str]) -> Vec<(Option<&'a str>, Option<&'a str>)> {
@@ -128,6 +119,7 @@ pub fn ensemble_merge(whisper_text: &str, gigaam_text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overlap::merge_overlap;
 
     #[test]
     fn test_identical() {
@@ -167,20 +159,20 @@ mod tests {
 
     #[test]
     fn test_process_segment_passthrough() {
-        let (merged, _) = process_segment("", "first segment");
+        let (merged, _) = merge_overlap("", "first segment");
         assert_eq!(merged, "first segment");
     }
 
     #[test]
     fn test_process_segment_with_overlap() {
-        let (merged, tail) = process_segment("one two three", "two three four");
+        let (merged, tail) = merge_overlap("one two three", "two three four");
         assert_eq!(merged, "four");
         assert!(!tail.is_empty());
     }
 
     #[test]
     fn test_process_segment_empty_new() {
-        let (merged, tail) = process_segment("prev tail", "");
+        let (merged, tail) = merge_overlap("prev tail", "");
         assert_eq!(merged, "");
         assert_eq!(tail, "prev tail");
     }
