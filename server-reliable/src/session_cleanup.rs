@@ -1,28 +1,30 @@
 //! Очистка старых сессий: по времени (TTL) и по размеру (max MB).
+//! Sessions marked with `.done` are cleaned up with a short grace period (5 min).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
+
+/// TTL for sessions marked as .done (5 minutes).
+const DONE_SESSION_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// Информация о сессии для сортировки.
 struct SessionInfo {
     path: PathBuf,
     mtime: SystemTime,
     size_bytes: u64,
+    is_done: bool,
 }
 
 /// Удаляет старые сессии по TTL и лимиту размера.
-/// Не трогает сессии, изменённые в последние grace_minutes (защита активных).
+/// Sessions with `.done` marker are cleaned up after 5 minutes regardless of main TTL.
+/// Не трогает сессии, изменённые в последние grace_minutes (защита активных, кроме .done).
 pub fn run(
     audio_dir: &Path,
     session_ttl_hours: f64,
     audio_dir_max_mb: f64,
     grace_minutes: u64,
 ) {
-    if session_ttl_hours <= 0.0 && audio_dir_max_mb <= 0.0 {
-        return;
-    }
-
     let Ok(entries) = std::fs::read_dir(audio_dir) else {
         return;
     };
@@ -55,26 +57,46 @@ pub fn run(
         };
         let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
         let size_bytes = dir_size(&path);
+        let is_done = path.join(".done").exists();
         total_bytes += size_bytes;
         sessions.push(SessionInfo {
             path,
             mtime,
             size_bytes,
+            is_done,
         });
     }
 
-    // Сортируем по mtime (старые первыми)
     sessions.sort_by(|a, b| a.mtime.cmp(&b.mtime));
 
     let mut deleted = 0u32;
     let mut freed_bytes: u64 = 0;
 
     for s in &sessions {
+        let age = now.duration_since(s.mtime).unwrap_or(Duration::ZERO);
+
+        if s.is_done {
+            // .done sessions: short TTL, no grace protection
+            if age >= DONE_SESSION_TTL {
+                if let Err(e) = std::fs::remove_dir_all(&s.path) {
+                    tracing::warn!("Failed to remove done session {}: {}", s.path.display(), e);
+                } else {
+                    deleted += 1;
+                    freed_bytes += s.size_bytes;
+                    total_bytes = total_bytes.saturating_sub(s.size_bytes);
+                }
+            }
+            continue;
+        }
+
+        if session_ttl_hours <= 0.0 && audio_dir_max_mb <= 0.0 {
+            continue;
+        }
+
         if deleted > 0 && total_bytes <= max_bytes {
             break;
         }
 
-        let age = now.duration_since(s.mtime).unwrap_or(Duration::ZERO);
         if age < grace {
             continue;
         }

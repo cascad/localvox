@@ -12,10 +12,11 @@ pub struct WhisperAdapter {
     context: WhisperContext,
     state_pool: Mutex<Vec<WhisperState>>,
     use_gpu: bool,
+    no_speech_thold: f32,
 }
 
 impl WhisperAdapter {
-    pub fn new(model_path: &str, use_gpu: bool) -> Result<Self> {
+    pub fn new(model_path: &str, use_gpu: bool, no_speech_thold: f32) -> Result<Self> {
         let mut params = WhisperContextParameters::default();
         params.use_gpu = use_gpu;
         let backend = if use_gpu { "GPU (CUDA)" } else { "CPU" };
@@ -32,6 +33,7 @@ impl WhisperAdapter {
             context,
             state_pool,
             use_gpu,
+            no_speech_thold: no_speech_thold.clamp(0.0, 1.0),
         })
     }
 
@@ -85,7 +87,7 @@ impl super::AsrModel for WhisperAdapter {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_single_segment(true);
-        params.set_no_speech_thold(0.6);
+        params.set_no_speech_thold(self.no_speech_thold);
         params.set_suppress_non_speech_tokens(true);
         if !language.is_empty() && language != "auto" {
             params.set_language(Some(language));

@@ -47,7 +47,11 @@ pub fn load_models(settings: &Settings) -> Result<Vec<Arc<dyn AsrModel>>> {
         let adapter: Arc<dyn AsrModel> = match entry.model_type.to_lowercase().as_str() {
             "whisper" => {
                 let use_gpu = entry.use_gpu.unwrap_or(settings.use_gpu);
-                Arc::new(WhisperAdapter::new(&entry.model_path, use_gpu)?)
+                Arc::new(WhisperAdapter::new(
+                    &entry.model_path,
+                    use_gpu,
+                    settings.whisper_no_speech_thold,
+                )?)
             }
             "gigaam" => {
                 let use_gpu = entry.use_gpu.unwrap_or(settings.use_gpu);

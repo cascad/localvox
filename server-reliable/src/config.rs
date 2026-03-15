@@ -85,6 +85,9 @@ pub struct Settings {
     /// New models array. If absent, synthesized from model_path + gigaam_model_dir + ensemble_enabled.
     #[serde(default)]
     pub models: Option<Vec<ModelEntry>>,
+    /// Whisper no_speech_thold (0..1). Ниже = чувствительнее к тихому микрофону. Default 0.4.
+    #[serde(default = "default_whisper_no_speech_thold")]
+    pub whisper_no_speech_thold: f32,
 }
 
 fn default_ensemble_enabled() -> bool {
@@ -159,6 +162,9 @@ fn default_session_ttl_hours() -> f64 {
 fn default_audio_dir_max_mb() -> f64 {
     0.0
 }
+fn default_whisper_no_speech_thold() -> f32 {
+    0.4
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -188,6 +194,7 @@ impl Default for Settings {
             session_idle_timeout_sec: default_session_idle_timeout_sec(),
             session_ttl_hours: default_session_ttl_hours(),
             audio_dir_max_mb: default_audio_dir_max_mb(),
+            whisper_no_speech_thold: default_whisper_no_speech_thold(),
         }
     }
 }

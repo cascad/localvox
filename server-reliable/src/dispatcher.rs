@@ -523,6 +523,7 @@ impl AsrDispatcher {
                     end_sec: out.end_sec,
                     seg_id: out.seg_id.clone(),
                     variants,
+                    seq: 0,
                 });
                 let _ = std::fs::remove_file(&out.wav_path);
                 let _ = std::fs::remove_file(&out.meta_path);
@@ -732,6 +733,7 @@ impl LlmDispatcher {
                     end_sec: asr.end_sec,
                     seg_id: asr.seg_id.clone(),
                     variants: None,
+                    seq: 0,
                 });
             }
 

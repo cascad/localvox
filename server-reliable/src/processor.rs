@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 /// One model's output in a transcript batch (when correction disabled + N models).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -29,6 +29,8 @@ pub enum ClientMessage {
         /// When correction disabled + N models: all variants labeled by model.
         #[allow(clippy::type_complexity)]
         variants: Option<Vec<TranscriptVariant>>,
+        /// Monotonic sequence number assigned by OutputSink.
+        seq: u64,
     },
     Status(serde_json::Value),
     /// Signals that all queued segments have been processed (for batch/YouTube clients).
@@ -68,6 +70,7 @@ pub struct LlmTask {
 pub struct OutputSink {
     transcript_path: PathBuf,
     client_tx: Arc<Mutex<Option<Sender<ClientMessage>>>>,
+    next_seq: AtomicU64,
 }
 
 impl OutputSink {
@@ -75,14 +78,22 @@ impl OutputSink {
         Self {
             transcript_path,
             client_tx: Arc::new(Mutex::new(client_tx)),
+            next_seq: AtomicU64::new(0),
         }
+    }
+
+    /// Restore seq counter (e.g. after reading existing transcript.jsonl on startup).
+    pub fn set_next_seq(&self, val: u64) {
+        self.next_seq.store(val, Ordering::Relaxed);
     }
 
     /// For Transcript/Done: append to transcript.jsonl, then forward to client.
     pub fn send(&self, msg: &ClientMessage) {
         match msg {
-            ClientMessage::Transcript { text, source, start_sec, end_sec, seg_id, variants } => {
+            ClientMessage::Transcript { text, source, start_sec, end_sec, seg_id, variants, .. } => {
+                let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
                 let mut line = serde_json::json!({
+                    "seq": seq,
                     "text": text,
                     "source": source,
                     "start_sec": start_sec,
@@ -100,6 +111,21 @@ impl OutputSink {
                     let _ = writeln!(f, "{}", line);
                     let _ = f.flush();
                 }
+                let msg_with_seq = ClientMessage::Transcript {
+                    text: text.clone(),
+                    source: *source,
+                    start_sec: *start_sec,
+                    end_sec: *end_sec,
+                    seg_id: seg_id.clone(),
+                    variants: variants.clone(),
+                    seq,
+                };
+                if let Ok(guard) = self.client_tx.lock() {
+                    if let Some(ref tx) = *guard {
+                        let _ = tx.send(msg_with_seq);
+                    }
+                }
+                return;
             }
             ClientMessage::Done => {
                 let line = r#"{"type":"done"}"#;
@@ -136,9 +162,21 @@ impl OutputSink {
         }
     }
 
-    /// Replay transcript.jsonl to client, then set new sender.
-    pub fn replay_to_client(&self, tx: Sender<ClientMessage>) {
-        let mut guard = self.client_tx.lock().unwrap();
+    /// Replay transcript.jsonl to client, then set new sender (for live resume).
+    /// Skips entries with seq ≤ skip_to_seq (0 = replay all).
+    pub fn replay_to_client(&self, tx: Sender<ClientMessage>, skip_to_seq: u64) {
+        self.replay_to_client_inner(tx, true, skip_to_seq);
+    }
+
+    /// Replay transcript.jsonl to client only; do not register sender (for completed session).
+    pub fn replay_to_client_no_register(&self, tx: Sender<ClientMessage>, skip_to_seq: u64) {
+        self.replay_to_client_inner(tx, false, skip_to_seq);
+    }
+
+    fn replay_to_client_inner(&self, tx: Sender<ClientMessage>, register: bool, skip_to_seq: u64) {
+        let mut max_seq: u64 = 0;
+        let mut replayed: u64 = 0;
+        let mut skipped: u64 = 0;
         if let Ok(content) = std::fs::read_to_string(&self.transcript_path) {
             for line in content.lines() {
                 let line = line.trim();
@@ -148,7 +186,17 @@ impl OutputSink {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                     if v.get("type").and_then(|t| t.as_str()) == Some("done") {
                         let _ = tx.send(ClientMessage::Done);
-                    } else if let (Some(text), Some(source), Some(start), Some(end)) = (
+                        continue;
+                    }
+                    let seq = v.get("seq").and_then(|x| x.as_u64()).unwrap_or(0);
+                    if seq > max_seq {
+                        max_seq = seq;
+                    }
+                    if seq > 0 && seq <= skip_to_seq {
+                        skipped += 1;
+                        continue;
+                    }
+                    if let (Some(text), Some(source), Some(start), Some(end)) = (
                         v.get("text").and_then(|x| x.as_str()),
                         v.get("source").and_then(|x| x.as_u64()),
                         v.get("start_sec").and_then(|x| x.as_f64()),
@@ -174,12 +222,27 @@ impl OutputSink {
                             end_sec: end,
                             seg_id,
                             variants,
+                            seq,
                         });
+                        replayed += 1;
                     }
                 }
             }
         }
-        *guard = Some(tx);
+        if max_seq > 0 {
+            self.next_seq.store(max_seq, Ordering::Relaxed);
+        }
+        if skip_to_seq > 0 {
+            tracing::info!(
+                "Replay: skipped {} (seq ≤ {}), sent {} new entries",
+                skipped, skip_to_seq, replayed
+            );
+        }
+        if register {
+            if let Ok(mut guard) = self.client_tx.lock() {
+                *guard = Some(tx);
+            }
+        }
     }
 }
 

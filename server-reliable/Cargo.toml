@@ -28,4 +28,4 @@ sherpa-rs = { version = "0.6", default-features = false, features = ["sys", "cud
 ndarray = "0.17"
 ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 ureq = { version = "2", features = ["json"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v7"] }

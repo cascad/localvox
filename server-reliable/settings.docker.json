@@ -1,6 +1,7 @@
 {
   "use_gpu": true,
   "language": "ru",
+  "whisper_no_speech_thold": 0.6,
   "audio_dir": "/app/audio",
   "sample_rate": 16000,
   "max_chunk_duration_sec": 10,

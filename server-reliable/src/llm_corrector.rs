@@ -72,13 +72,14 @@ impl LlmCorrector {
 
     fn do_request(&self, prompt: &str, merged_text: &str) -> Option<String> {
         let is_thinking_model = self.model.contains("3.5") || self.model.to_lowercase().contains("deepseek");
+        let num_predict = merged_text.len().max(96).min(384);
         let mut body = serde_json::json!({
             "model": self.model,
             "prompt": prompt,
             "stream": false,
             "options": {
                 "temperature": 0.1,
-                "num_predict": 256,
+                "num_predict": num_predict,
             }
         });
         if is_thinking_model {
@@ -127,13 +128,57 @@ impl LlmCorrector {
             return None;
         }
         if response_text.len() > merged_text.len() * 3 {
-            tracing::warn!("LLM response too long ({} vs {} chars) after {:.1}s, discarding",
-                response_text.len(), merged_text.len(), elapsed);
+            let trunc_target = merged_text.len().max(50) * 2;
+            if let Some(truncated) = truncate_at_sentence_boundary(&response_text, trunc_target) {
+                if truncated.len() >= merged_text.len() / 2 {
+                    tracing::warn!(
+                        "LLM response truncated ({} → {} chars, input {} chars) after {:.1}s",
+                        response_text.len(),
+                        truncated.len(),
+                        merged_text.len(),
+                        elapsed
+                    );
+                    return Some(truncated);
+                }
+            }
+            tracing::warn!(
+                "LLM response too long ({} vs {} chars) after {:.1}s, discarding",
+                response_text.len(),
+                merged_text.len(),
+                elapsed
+            );
+            tracing::warn!("  [raw ASR] {}", merged_text);
+            tracing::warn!("  [LLM proposed] {}", response_text);
             return None;
         }
 
         tracing::info!("LLM correction {:.1}s: {:?}", elapsed, response_text.chars().take(60).collect::<String>());
         Some(response_text)
+    }
+}
+
+fn truncate_at_sentence_boundary(text: &str, target_bytes: usize) -> Option<String> {
+    if target_bytes >= text.len() {
+        return Some(text.to_string());
+    }
+    let mut end = target_bytes;
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    let slice = &text[..end];
+    let cut = slice
+        .rfind(". ")
+        .map(|p| p + 1)
+        .or_else(|| slice.rfind("? ").map(|p| p + 1))
+        .or_else(|| slice.rfind("! ").map(|p| p + 1))
+        .or_else(|| slice.rfind(", ").map(|p| p + 1))
+        .or_else(|| slice.rfind(' '))
+        .unwrap_or(end);
+    let result = text[..cut].trim();
+    if result.is_empty() {
+        None
+    } else {
+        Some(result.to_string())
     }
 }
 

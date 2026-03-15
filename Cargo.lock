@@ -1132,6 +1132,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tungstenite",
+ "ureq 2.12.1",
  "url",
  "wasapi",
 ]
@@ -1160,15 +1161,6 @@ dependencies = [
  "uuid",
  "webrtc-vad",
  "whisper-rs",
-]
-
-[[package]]
-name = "llm-debug"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde_json",
- "ureq 2.12.1",
 ]
 
 [[package]]

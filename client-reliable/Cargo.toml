@@ -21,6 +21,7 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 chrono = "0.4"
 ctrlc = "3"
+ureq = { version = "2", default-features = false, features = ["json"] }
 
 # Windows: WASAPI для loopback (захват системного звука)
 [target.'cfg(windows)'.dependencies]

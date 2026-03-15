@@ -240,7 +240,7 @@ impl AudioWriter {
         Ok(session_dir)
     }
 
-    /// Resume writing into an existing session dir. Scans for max seq per source.
+    /// Resume writing into an existing session dir. Scans files AND transcript.jsonl for max seq per source.
     pub fn resume_session(
         &mut self,
         session_dir: PathBuf,
@@ -250,24 +250,21 @@ impl AudioWriter {
         self.source_count = source_count.clamp(1, 2);
         self.sources.clear();
         let mut max_seq: std::collections::HashMap<u8, u32> = std::collections::HashMap::new();
+
+        // Scan existing files (WAV, .part, .meta.json)
         let entries = fs::read_dir(&session_dir)?;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            for sid in 0..=1u8 {
-                let prefix = format!("src{}_", sid);
-                if name.starts_with(&prefix) {
-                    if let Some(num_part) = name.strip_prefix(&prefix) {
-                        let num_str = num_part
-                            .strip_suffix(".part")
-                            .or_else(|| num_part.strip_suffix(".wav"))
-                            .or_else(|| num_part.strip_suffix(".meta.json"))
-                            .unwrap_or(num_part);
-                        if let Ok(seq) = num_str.parse::<u32>() {
-                            max_seq
-                                .entry(sid)
-                                .and_modify(|v| *v = (*v).max(seq))
-                                .or_insert(seq);
-                        }
+            Self::parse_seg_id_into(&name, &mut max_seq);
+        }
+
+        // Also scan transcript.jsonl for seg_ids of already-processed (deleted) segments
+        let jsonl_path = session_dir.join("transcript.jsonl");
+        if let Ok(content) = fs::read_to_string(&jsonl_path) {
+            for line in content.lines() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    if let Some(seg_id) = v.get("seg_id").and_then(|x| x.as_str()) {
+                        Self::parse_seg_id_into(seg_id, &mut max_seq);
                     }
                 }
             }
@@ -318,6 +315,28 @@ impl AudioWriter {
             );
         }
         Ok(())
+    }
+
+    /// Parse a seg_id like "src0_000042" or filename like "src0_000042.wav" and update max_seq.
+    fn parse_seg_id_into(name: &str, max_seq: &mut std::collections::HashMap<u8, u32>) {
+        for sid in 0..=1u8 {
+            let prefix = format!("src{}_", sid);
+            if let Some(rest) = name.strip_prefix(&prefix) {
+                let num_str = rest
+                    .strip_suffix(".part")
+                    .or_else(|| rest.strip_suffix(".wav"))
+                    .or_else(|| rest.strip_suffix(".meta.json"))
+                    .or_else(|| rest.strip_suffix(".asr.json"))
+                    .unwrap_or(rest);
+                if let Ok(seq) = num_str.parse::<u32>() {
+                    max_seq
+                        .entry(sid)
+                        .and_modify(|v| *v = (*v).max(seq))
+                        .or_insert(seq);
+                }
+                break;
+            }
+        }
     }
 
     pub fn set_source_count(&mut self, n: u8) {
