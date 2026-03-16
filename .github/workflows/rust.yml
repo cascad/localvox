@@ -27,6 +27,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libclang-dev libasound2-dev
+
       - name: Check format
         run: cargo fmt --all -- --check
 
@@ -34,8 +37,6 @@ jobs:
         run: cargo test -p live-transcribe-client-reliable
 
       # Server: CPU-only build (--no-default-features) для CI без GPU
-      - name: Install server build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libclang-dev
       - name: Test server (CPU)
         run: cargo test -p live-transcribe-server-reliable --no-default-features
       - name: Clippy client
