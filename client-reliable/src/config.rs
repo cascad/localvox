@@ -119,7 +119,10 @@ pub fn load_config() -> ClientConfig {
             let path = get_config_save_path();
             if let Ok(text) = serde_json::to_string_pretty(&cfg) {
                 if let Err(e) = std::fs::write(&path, text) {
-                    eprintln!("Не удалось сохранить конфиг по умолчанию в {}: {e}", path.display());
+                    eprintln!(
+                        "Не удалось сохранить конфиг по умолчанию в {}: {e}",
+                        path.display()
+                    );
                 } else {
                     eprintln!("Создан конфиг по умолчанию: {}", path.display());
                 }
