@@ -34,10 +34,10 @@ impl GigaAmAdapter {
             anyhow::bail!("GigaAM tokens not found: {}", tokens_path.display());
         }
 
-        let model_c = CString::new(model_path.to_string_lossy().as_bytes())
-            .context("model path")?;
-        let tokens_c = CString::new(tokens_path.to_string_lossy().as_bytes())
-            .context("tokens path")?;
+        let model_c =
+            CString::new(model_path.to_string_lossy().as_bytes()).context("model path")?;
+        let tokens_c =
+            CString::new(tokens_path.to_string_lossy().as_bytes()).context("tokens path")?;
         let provider = if use_gpu { "cuda" } else { "cpu" };
         let provider_c = CString::new(provider).context("provider")?;
         let decoding_c = CString::new("greedy_search").context("decoding")?;
@@ -79,7 +79,11 @@ impl GigaAmAdapter {
         }
 
         let backend = if use_gpu { "GPU" } else { "CPU" };
-        tracing::info!("GigaAM loaded: {} (provider: {})", model_dir.display(), provider);
+        tracing::info!(
+            "GigaAM loaded: {} (provider: {})",
+            model_dir.display(),
+            provider
+        );
         Ok(Self {
             recognizer,
             backend,
@@ -136,12 +140,7 @@ impl super::AsrModel for GigaAmAdapter {
         self.backend
     }
 
-    fn transcribe(
-        &self,
-        wav_path: &Path,
-        _samples: &[f32],
-        _language: &str,
-    ) -> Result<String> {
+    fn transcribe(&self, wav_path: &Path, _samples: &[f32], _language: &str) -> Result<String> {
         self.transcribe_inner(wav_path)
     }
 

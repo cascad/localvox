@@ -1,10 +1,9 @@
 {
   "server": "ws://localhost:9745",
-  "device": "0",
-  "loopback": "Razer",
+  "device": "default",
+  "loopback": "default-output",
   "output": "transcript.txt",
-  "client_id ": "live",
-  "summarize_enabled": false,
+  "summarize_enabled": true,
   "summarize_backend": "ollama",
   "summarize_url": "http://localhost:11434",
   "summarize_model": "qwen3.5:9b",

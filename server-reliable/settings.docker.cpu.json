@@ -1,23 +1,24 @@
 {
-  "use_gpu": true,
-  "cuda_path": "",
+  "use_gpu": false,
   "language": "ru",
-  "audio_dir": "audio",
+  "whisper_no_speech_thold": 0.6,
+  "audio_dir": "/app/audio",
   "sample_rate": 16000,
   "max_chunk_duration_sec": 10,
   "min_chunk_duration_sec": 2,
   "vad_silence_sec": 1.0,
   "overlap_sec": 2.5,
   "llm_correction_enabled": true,
-  "ollama_url": "http://localhost:11434",
+  "ollama_url": "http://host.docker.internal:11434",
   "llm_model": "qwen3.5:4b",
+  "llm_timeout_sec": 60,
   "llm_prompt_single": "Исправь ошибки распознавания речи в тексте.\nТекст: \"{merged_text}\"\nКонтекст предыдущих фраз: {context_str}\n\nИсправь явные ошибки распознавания.\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только исправленный текст, без кавычек и пояснений.",
   "llm_prompt_ensemble": "Даны варианты распознавания одного аудиофрагмента от разных ASR-моделей.\n\n{model_variants}\n\nАлгоритмический мерж (word-level alignment): \"{merged_text}\"\nКонтекст предыдущих фраз: {context_str}\n\nЗадача: умный мерж вариантов — объедини лучшие части из разных моделей (где одна точнее, другая полнее и т.п.), а не просто выбери один. Исправь явные ошибки распознавания.\nВажно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\nВерни только итоговый текст, без кавычек и пояснений.",
   "session_ttl_hours": 24,
-  "audio_dir_max_mb": 1024,
+  "audio_dir_max_mb": 4096,
   "models": [
-    { "type": "whisper", "model_path": "models/whisper/ggml-large-v3-turbo.bin", "use_gpu": true },
-    { "type": "gigaam", "model_path": "models/gigaam-v3-ctc-ru", "use_gpu": true },
-    { "type": "parakeet", "model_path": "models/parakeet-tdt-0.6b-v3-int8", "use_gpu": true }
-  ]
+    { "type": "whisper", "model_path": "/models/whisper/ggml-large-v3-turbo.bin", "use_gpu": false },
+    { "type": "gigaam", "model_path": "/models/gigaam", "use_gpu": false }
+  ],
+  "_parakeet_example": "Добавить в models: { \"type\": \"parakeet\", \"model_path\": \"/models/parakeet\", \"use_gpu\": false }"
 }

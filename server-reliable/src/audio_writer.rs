@@ -2,7 +2,7 @@
 
 use crate::vad::VadDetector;
 use chrono::Utc;
-use hound::{WavSpec, WavWriter, SampleFormat};
+use hound::{SampleFormat, WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
@@ -58,7 +58,8 @@ impl SourceState {
             bits_per_sample: 16,
             sample_format: SampleFormat::Int,
         };
-        let mut writer = WavWriter::new(file, spec).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut writer = WavWriter::new(file, spec)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         if let Some(data) = prepend_overlap {
             for chunk in data.chunks(2) {
                 if chunk.len() == 2 {
@@ -80,7 +81,8 @@ impl SourceState {
             self.writer.take(),
         ) {
             (Some(p), st, Some(mut w)) => {
-                w.flush().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                w.flush()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
                 drop(w);
                 let dur = self.duration_sec;
                 (p, st, dur)
@@ -131,7 +133,10 @@ impl SourceState {
     }
 
     fn get_overlap_bytes(&self) -> Vec<u8> {
-        self.overlap_chunks.iter().flat_map(|c| c.iter().copied()).collect()
+        self.overlap_chunks
+            .iter()
+            .flat_map(|c| c.iter().copied())
+            .collect()
     }
 
     fn feed(&mut self, pcm: &[u8]) -> Result<Vec<PathBuf>, std::io::Error> {
@@ -140,9 +145,8 @@ impl SourceState {
         self.duration_sec += chunk_sec;
 
         let (_is_speech, should_flush_vad) = self.vad.process_frame(pcm);
-        let flush_vad = should_flush_vad
-            && self.duration_sec >= self.min_chunk_sec
-            && self.writer.is_some();
+        let flush_vad =
+            should_flush_vad && self.duration_sec >= self.min_chunk_sec && self.writer.is_some();
 
         let flush_time = self.duration_sec >= self.max_chunk_sec && self.writer.is_some();
 
@@ -157,7 +161,11 @@ impl SourceState {
             self.duration_sec = 0.0;
             self.overlap_chunks.clear();
             self.overlap_bytes = 0;
-            let prepend = if overlap.is_empty() { None } else { Some(overlap.as_slice()) };
+            let prepend = if overlap.is_empty() {
+                None
+            } else {
+                Some(overlap.as_slice())
+            };
             self.open_new_file(prepend)?;
             return Ok(completed);
         }
@@ -169,7 +177,11 @@ impl SourceState {
                 completed.push(p);
             }
             self.duration_sec = chunk_sec;
-            let prepend = if overlap.is_empty() { None } else { Some(overlap.as_slice()) };
+            let prepend = if overlap.is_empty() {
+                None
+            } else {
+                Some(overlap.as_slice())
+            };
             self.open_new_file(prepend)?;
             self.write_pcm(pcm)?;
             return Ok(completed);
@@ -281,8 +293,7 @@ impl AudioWriter {
                 }
             }
         }
-        let silence_frames = (self.settings.sample_rate as f64
-            * self.settings.vad_silence_sec
+        let silence_frames = (self.settings.sample_rate as f64 * self.settings.vad_silence_sec
             / 320.0)
             .ceil() as u32;
         for sid in 0..=1u8 {
@@ -354,8 +365,9 @@ impl AudioWriter {
             return None;
         }
         if !self.sources.contains_key(&source_id) {
-            let silence_frames =
-                (self.settings.sample_rate as f64 * self.settings.vad_silence_sec / 320.0).ceil() as u32;
+            let silence_frames = (self.settings.sample_rate as f64 * self.settings.vad_silence_sec
+                / 320.0)
+                .ceil() as u32;
             self.sources.insert(
                 source_id,
                 SourceState {
@@ -380,7 +392,11 @@ impl AudioWriter {
         self.sources.get_mut(&source_id)
     }
 
-    pub fn feed(&mut self, source_id: u8, pcm: &[u8]) -> Result<Vec<(PathBuf, u8)>, std::io::Error> {
+    pub fn feed(
+        &mut self,
+        source_id: u8,
+        pcm: &[u8],
+    ) -> Result<Vec<(PathBuf, u8)>, std::io::Error> {
         if !self.recording {
             return Ok(Vec::new());
         }

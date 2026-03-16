@@ -39,7 +39,11 @@ impl LlmCorrector {
         merged_text: &str,
         context_str: &str,
     ) -> Option<String> {
-        let context_str = if context_str.is_empty() { "(нет)" } else { context_str };
+        let context_str = if context_str.is_empty() {
+            "(нет)"
+        } else {
+            context_str
+        };
 
         let prompt = if model_outputs.len() <= 1 {
             self.prompt_single
@@ -55,13 +59,22 @@ impl LlmCorrector {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let mut p = self.prompt_ensemble
+            let mut p = self
+                .prompt_ensemble
                 .replace("{context_str}", context_str)
                 .replace("{merged_text}", merged_text)
                 .replace("{model_variants}", &model_variants);
             if model_outputs.len() >= 2 {
-                let w = model_outputs.iter().find(|o| o.model_name == "whisper").map(|o| o.text.as_str()).unwrap_or("");
-                let g = model_outputs.iter().find(|o| o.model_name == "gigaam").map(|o| o.text.as_str()).unwrap_or("");
+                let w = model_outputs
+                    .iter()
+                    .find(|o| o.model_name == "whisper")
+                    .map(|o| o.text.as_str())
+                    .unwrap_or("");
+                let g = model_outputs
+                    .iter()
+                    .find(|o| o.model_name == "gigaam")
+                    .map(|o| o.text.as_str())
+                    .unwrap_or("");
                 p = p.replace("{whisper_text}", w).replace("{gigaam_text}", g);
             }
             p
@@ -79,7 +92,8 @@ impl LlmCorrector {
     ];
 
     fn do_request(&self, prompt: &str, merged_text: &str) -> Option<String> {
-        let is_thinking_model = self.model.contains("3.5") || self.model.to_lowercase().contains("deepseek");
+        let is_thinking_model =
+            self.model.contains("3.5") || self.model.to_lowercase().contains("deepseek");
         let num_predict = merged_text.len().max(96).min(384);
         let mut body = serde_json::json!({
             "model": self.model,
@@ -138,7 +152,9 @@ impl LlmCorrector {
         }
         if response_text.len() > merged_text.len() * 3 {
             let trunc_target = merged_text.len().max(50) * 2;
-            if let Some((truncated, discarded)) = truncate_at_sentence_boundary(&response_text, trunc_target) {
+            if let Some((truncated, discarded)) =
+                truncate_at_sentence_boundary(&response_text, trunc_target)
+            {
                 if truncated.len() >= merged_text.len() / 2 {
                     tracing::warn!(
                         "LLM response truncated ({} → {} chars, input {} chars) after {:.1}s",
@@ -165,7 +181,11 @@ impl LlmCorrector {
             return None;
         }
 
-        tracing::info!("LLM correction {:.1}s: {:?}", elapsed, response_text.chars().take(60).collect::<String>());
+        tracing::info!(
+            "LLM correction {:.1}s: {:?}",
+            elapsed,
+            response_text.chars().take(60).collect::<String>()
+        );
         Some(response_text)
     }
 }
@@ -259,7 +279,9 @@ mod tests {
 
     #[test]
     fn test_strip_variant_prefix_ru() {
-        let r = strip_llm_reasoning("Используем вариант А (Whisper): \"Во-первых, у меня самые лучшие\"");
+        let r = strip_llm_reasoning(
+            "Используем вариант А (Whisper): \"Во-первых, у меня самые лучшие\"",
+        );
         assert_eq!(r, "Во-первых, у меня самые лучшие");
     }
 
@@ -283,9 +305,18 @@ mod tests {
 
     #[test]
     fn test_real_speech_preserved() {
-        assert_eq!(strip_llm_reasoning("Результат: мы получили отличный"), "Результат: мы получили отличный");
-        assert_eq!(strip_llm_reasoning("Ответ: да, конечно"), "Ответ: да, конечно");
-        assert_eq!(strip_llm_reasoning("Исправленный текст: вот он"), "Исправленный текст: вот он");
+        assert_eq!(
+            strip_llm_reasoning("Результат: мы получили отличный"),
+            "Результат: мы получили отличный"
+        );
+        assert_eq!(
+            strip_llm_reasoning("Ответ: да, конечно"),
+            "Ответ: да, конечно"
+        );
+        assert_eq!(
+            strip_llm_reasoning("Исправленный текст: вот он"),
+            "Исправленный текст: вот он"
+        );
     }
 
     #[test]

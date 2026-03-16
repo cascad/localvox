@@ -1,7 +1,7 @@
 //! VAD wrapper (same semantics as Python vad_util).
 //! webrtc-vad: 20ms frame = 320 samples at 16kHz.
 
-use webrtc_vad::{Vad, VadMode, SampleRate};
+use webrtc_vad::{SampleRate, Vad, VadMode};
 
 const FRAME_SAMPLES: usize = 320; // 20 ms at 16 kHz
 
@@ -97,7 +97,10 @@ mod tests {
     #[test]
     fn test_reset_silence() {
         let mut vad = VadDetector::new(16000, 2);
-        let silence: Vec<u8> = vec![0i16; 320].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let silence: Vec<u8> = vec![0i16; 320]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
         let _ = vad.process_frame(&silence);
         let _ = vad.process_frame(&silence);
         vad.reset_silence();

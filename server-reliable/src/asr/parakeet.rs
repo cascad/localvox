@@ -42,10 +42,14 @@ impl ParakeetAdapter {
             }
         }
 
-        let encoder_c = CString::new(encoder_path.to_string_lossy().as_bytes()).context("encoder path")?;
-        let decoder_c = CString::new(decoder_path.to_string_lossy().as_bytes()).context("decoder path")?;
-        let joiner_c = CString::new(joiner_path.to_string_lossy().as_bytes()).context("joiner path")?;
-        let tokens_c = CString::new(tokens_path.to_string_lossy().as_bytes()).context("tokens path")?;
+        let encoder_c =
+            CString::new(encoder_path.to_string_lossy().as_bytes()).context("encoder path")?;
+        let decoder_c =
+            CString::new(decoder_path.to_string_lossy().as_bytes()).context("decoder path")?;
+        let joiner_c =
+            CString::new(joiner_path.to_string_lossy().as_bytes()).context("joiner path")?;
+        let tokens_c =
+            CString::new(tokens_path.to_string_lossy().as_bytes()).context("tokens path")?;
         let provider = if use_gpu { "cuda" } else { "cpu" };
         let provider_c = CString::new(provider).context("provider")?;
         let decoding_c = CString::new("greedy_search").context("decoding")?;
@@ -94,7 +98,11 @@ impl ParakeetAdapter {
         }
 
         let backend = if use_gpu { "GPU" } else { "CPU" };
-        tracing::info!("Parakeet loaded: {} (provider: {})", model_dir.display(), provider);
+        tracing::info!(
+            "Parakeet loaded: {} (provider: {})",
+            model_dir.display(),
+            provider
+        );
         Ok(Self {
             recognizer,
             backend,
@@ -151,12 +159,7 @@ impl super::AsrModel for ParakeetAdapter {
         self.backend
     }
 
-    fn transcribe(
-        &self,
-        wav_path: &Path,
-        _samples: &[f32],
-        _language: &str,
-    ) -> Result<String> {
+    fn transcribe(&self, wav_path: &Path, _samples: &[f32], _language: &str) -> Result<String> {
         self.transcribe_inner(wav_path)
     }
 

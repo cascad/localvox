@@ -19,12 +19,7 @@ struct SessionInfo {
 /// Удаляет старые сессии по TTL и лимиту размера.
 /// Sessions with `.done` marker are cleaned up after 5 minutes regardless of main TTL.
 /// Не трогает сессии, изменённые в последние grace_minutes (защита активных, кроме .done).
-pub fn run(
-    audio_dir: &Path,
-    session_ttl_hours: f64,
-    audio_dir_max_mb: f64,
-    grace_minutes: u64,
-) {
+pub fn run(audio_dir: &Path, session_ttl_hours: f64, audio_dir_max_mb: f64, grace_minutes: u64) {
     let Ok(entries) = std::fs::read_dir(audio_dir) else {
         return;
     };

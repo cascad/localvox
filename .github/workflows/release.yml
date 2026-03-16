@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: localvox-client-windows-x64
+            artifact_ext: .exe
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact_name: localvox-client-macos-x64
+            artifact_ext: ''
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact_name: localvox-client-macos-arm64
+            artifact_ext: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Build client
+        run: cargo build -p live-transcribe-client-reliable --release --target ${{ matrix.target }}
+
+      - name: Prepare artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact
+          Copy-Item target/${{ matrix.target }}/release/live-transcribe-client-reliable.exe artifact/localvox-client.exe
+          Copy-Item client-config.example.json artifact/
+          Copy-Item README.md artifact/
+          Compress-Archive -Path artifact/* -DestinationPath localvox-client-windows-x64.zip
+
+      - name: Prepare artifact (macOS x64)
+        if: matrix.os == 'macos-14' && matrix.target == 'x86_64-apple-darwin'
+        run: |
+          mkdir artifact
+          cp target/${{ matrix.target }}/release/live-transcribe-client-reliable artifact/localvox-client
+          cp client-config.example.json artifact/client-config.example.json
+          cp README.md artifact/
+          cd artifact && zip -r ../localvox-client-macos-x64.zip . && cd ..
+
+      - name: Prepare artifact (macOS arm64)
+        if: matrix.os == 'macos-14' && matrix.target == 'aarch64-apple-darwin'
+        run: |
+          mkdir artifact
+          cp target/${{ matrix.target }}/release/live-transcribe-client-reliable artifact/localvox-client
+          cp client-config.example.json artifact/client-config.example.json
+          cp README.md artifact/
+          cd artifact && zip -r ../localvox-client-macos-arm64.zip . && cd ..
+
+      - name: Upload artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: localvox-client-windows-x64
+          path: localvox-client-windows-x64.zip
+
+      - name: Upload artifact (macOS x64)
+        if: matrix.os == 'macos-14' && matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: localvox-client-macos-x64
+          path: localvox-client-macos-x64.zip
+
+      - name: Upload artifact (macOS arm64)
+        if: matrix.os == 'macos-14' && matrix.target == 'aarch64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: localvox-client-macos-arm64
+          path: localvox-client-macos-arm64.zip
+
+  create-release:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            artifacts/localvox-client-windows-x64/localvox-client-windows-x64.zip
+            artifacts/localvox-client-macos-x64/localvox-client-macos-x64.zip
+            artifacts/localvox-client-macos-arm64/localvox-client-macos-arm64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

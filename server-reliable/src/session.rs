@@ -10,7 +10,10 @@ pub fn write_session_meta(session_dir: &Path, client_id: Option<&str>) {
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
     let path = session_dir.join("session.json");
-    if let Err(e) = std::fs::write(&path, serde_json::to_string_pretty(&meta).unwrap_or_default()) {
+    if let Err(e) = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    ) {
         tracing::warn!("Failed to write session.json: {}", e);
     }
 }
@@ -19,7 +22,11 @@ pub fn write_session_meta(session_dir: &Path, client_id: Option<&str>) {
 pub fn mark_session_done(session_dir: &Path) {
     let marker = session_dir.join(".done");
     if let Err(e) = std::fs::write(&marker, chrono::Utc::now().to_rfc3339()) {
-        tracing::warn!("Failed to write .done marker in {}: {}", session_dir.display(), e);
+        tracing::warn!(
+            "Failed to write .done marker in {}: {}",
+            session_dir.display(),
+            e
+        );
     }
 }
 
@@ -77,13 +84,13 @@ pub fn scan_sessions_on_disk(audio_dir: &Path) -> Vec<DiskSession> {
 
 /// On startup: scan session dirs, deduplicate by client_id (keep newest by UUIDv7),
 /// mark stale as .done, populate client_sessions in registry, log a table.
-pub fn startup_session_scan(
-    audio_dir: &Path,
-    registry: &crate::session_registry::SessionRegistry,
-) {
+pub fn startup_session_scan(audio_dir: &Path, registry: &crate::session_registry::SessionRegistry) {
     let sessions = scan_sessions_on_disk(audio_dir);
     if sessions.is_empty() {
-        info!("Startup scan: no existing sessions found in {}", audio_dir.display());
+        info!(
+            "Startup scan: no existing sessions found in {}",
+            audio_dir.display()
+        );
         return;
     }
 
@@ -135,10 +142,24 @@ pub fn startup_session_scan(
     // Log summary table
     let mappings = registry.client_sessions_snapshot();
     if mappings.is_empty() {
-        info!("Startup scan: {} sessions on disk ({} done), no active client mappings", sessions.len(), done_count);
+        info!(
+            "Startup scan: {} sessions on disk ({} done), no active client mappings",
+            sessions.len(),
+            done_count
+        );
     } else {
-        info!("Startup scan: {} sessions on disk ({} done), {} active:", sessions.len(), done_count, mappings.len());
-        let cw = mappings.iter().map(|(c, _)| c.len()).max().unwrap_or(8).max(9);
+        info!(
+            "Startup scan: {} sessions on disk ({} done), {} active:",
+            sessions.len(),
+            done_count,
+            mappings.len()
+        );
+        let cw = mappings
+            .iter()
+            .map(|(c, _)| c.len())
+            .max()
+            .unwrap_or(8)
+            .max(9);
         info!("  {:<cw$} | session_id", "client_id", cw = cw);
         info!("  {:-<cw$}-+-{:-<36}", "", "", cw = cw);
         for (cid, sid) in &mappings {

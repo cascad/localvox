@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 
 use anyhow::Result;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -18,17 +20,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Terminal;
 
-use crate::audio::{collect_input_devices, format_device_display, key_matches, list_output_device_names};
+use crate::audio::{
+    collect_input_devices, format_device_display, key_matches, list_output_device_names,
+};
 use crate::config::{get_config_save_path, ClientConfig};
 use crate::summarize::spawn_summarize_ollama;
 use crate::transcript::TranscriptStore;
 use crate::types::{
-    AudioSource, MAX_DEBUG_LINES, ServerMessage, SettingsState, StatusData,
-    TuiMode, UiEvent, WsOutgoing,
+    AudioSource, ServerMessage, SettingsState, StatusData, TuiMode, UiEvent, WsOutgoing,
+    MAX_DEBUG_LINES,
 };
 
 /// Returns (need_restart, recording) — need_restart if settings were saved, recording state to preserve.
 /// When configure_only is true, starts in Settings mode (for --configure CLI); no ws/audio threads.
+#[allow(clippy::too_many_arguments)]
 pub fn run_tui(
     ui_rx: mpsc::Receiver<UiEvent>,
     ui_tx: mpsc::Sender<UiEvent>,
@@ -71,15 +76,27 @@ pub fn run_tui(
             .map(|(i, (dev, n))| (i, format_device_display(&dev, &n, "")))
             .collect();
         let output_devices = list_output_device_names();
-        let input_selected = cfg.device.as_ref().and_then(|d| d.parse::<usize>().ok())
-            .filter(|&i| i < input_devices.len()).unwrap_or(0);
-        let output_selected = cfg.loopback.as_ref().map(|s| s.as_str())
+        let input_selected = cfg
+            .device
+            .as_ref()
+            .and_then(|d| d.parse::<usize>().ok())
+            .filter(|&i| i < input_devices.len())
+            .unwrap_or(0);
+        let output_selected = cfg
+            .loopback
+            .as_deref()
             .or_else(|| cfg.device2.as_ref().and_then(|d| d.strip_prefix("out:")))
             .map_or(0, |s| {
-                output_devices.iter().position(|(_, n)| n.eq_ignore_ascii_case(s)).map(|i| i + 1).unwrap_or(0)
+                output_devices
+                    .iter()
+                    .position(|(_, n)| n.eq_ignore_ascii_case(s))
+                    .map(|i| i + 1)
+                    .unwrap_or(0)
             });
         let mut input_state = ListState::default();
-        input_state.select(Some(input_selected.min(input_devices.len().saturating_sub(1))));
+        input_state.select(Some(
+            input_selected.min(input_devices.len().saturating_sub(1)),
+        ));
         let mut output_state = ListState::default();
         output_state.select(Some(output_selected.min(output_devices.len())));
         Some(SettingsState {
@@ -128,21 +145,37 @@ pub fn run_tui(
                             }
                             code if key_matches(code, 's') => {
                                 let input_idx = st.input_state.selected().unwrap_or(0);
-                                let device = st.input_devices
+                                let device = st
+                                    .input_devices
                                     .get(input_idx)
                                     .map(|(i, _)| format!("{i}"))
-                                    .or_else(|| st.input_devices.first().map(|(i, _)| format!("{i}")))
+                                    .or_else(|| {
+                                        st.input_devices.first().map(|(i, _)| format!("{i}"))
+                                    })
                                     .unwrap_or_default();
                                 let loopback = st.output_state.selected().and_then(|idx| {
-                                    if idx == 0 { None }
-                                    else { st.output_devices.get(idx - 1).map(|(_, n)| n.clone()) }
+                                    if idx == 0 {
+                                        None
+                                    } else {
+                                        st.output_devices.get(idx - 1).map(|(_, n)| n.clone())
+                                    }
                                 });
                                 let save_cfg = ClientConfig {
-                                    server: cfg.server.clone().or_else(|| Some("ws://localhost:9745".into())),
-                                    device: if device.is_empty() { None } else { Some(device) },
+                                    server: cfg
+                                        .server
+                                        .clone()
+                                        .or_else(|| Some("ws://localhost:9745".into())),
+                                    device: if device.is_empty() {
+                                        None
+                                    } else {
+                                        Some(device)
+                                    },
                                     loopback,
                                     device2: None,
-                                    output: cfg.output.clone().or_else(|| Some("transcript.txt".into())),
+                                    output: cfg
+                                        .output
+                                        .clone()
+                                        .or_else(|| Some("transcript.txt".into())),
                                     export_dir: cfg.export_dir.clone(),
                                     summarize_enabled: cfg.summarize_enabled,
                                     summarize_backend: cfg.summarize_backend.clone(),
@@ -157,7 +190,7 @@ pub fn run_tui(
                                         Ok(_) => {
                                             need_restart = true;
                                             restart_at = Some(Instant::now());
-                                            format!("Сохранено. Применяется…")
+                                            "Сохранено. Применяется…".to_string()
                                         }
                                         Err(e) => format!("Ошибка: {e}"),
                                     });
@@ -166,14 +199,30 @@ pub fn run_tui(
                             }
                             KeyCode::Tab | KeyCode::BackTab => st.focus = 1 - st.focus,
                             code if code == KeyCode::Up || key_matches(code, 'k') => {
-                                let state = if st.focus == 0 { &mut st.input_state } else { &mut st.output_state };
-                                let len = if st.focus == 0 { st.input_devices.len() } else { st.output_devices.len() + 1 };
+                                let state = if st.focus == 0 {
+                                    &mut st.input_state
+                                } else {
+                                    &mut st.output_state
+                                };
+                                let len = if st.focus == 0 {
+                                    st.input_devices.len()
+                                } else {
+                                    st.output_devices.len() + 1
+                                };
                                 let i = state.selected().unwrap_or(0).saturating_sub(1);
                                 state.select(Some(i.min(len.saturating_sub(1))));
                             }
                             code if code == KeyCode::Down || key_matches(code, 'j') => {
-                                let state = if st.focus == 0 { &mut st.input_state } else { &mut st.output_state };
-                                let len = if st.focus == 0 { st.input_devices.len() } else { st.output_devices.len() + 1 };
+                                let state = if st.focus == 0 {
+                                    &mut st.input_state
+                                } else {
+                                    &mut st.output_state
+                                };
+                                let len = if st.focus == 0 {
+                                    st.input_devices.len()
+                                } else {
+                                    st.output_devices.len() + 1
+                                };
                                 let i = state.selected().unwrap_or(0).saturating_add(1);
                                 state.select(Some(i.min(len.saturating_sub(1))));
                             }
@@ -186,20 +235,39 @@ pub fn run_tui(
                                     let input_devices: Vec<_> = collect_input_devices()
                                         .into_iter()
                                         .enumerate()
-                                        .map(|(i, (dev, n))| (i, format_device_display(&dev, &n, "")))
+                                        .map(|(i, (dev, n))| {
+                                            (i, format_device_display(&dev, &n, ""))
+                                        })
                                         .collect();
                                     let output_devices = list_output_device_names();
-                                    let input_selected = cfg.device.as_ref().and_then(|d| d.parse::<usize>().ok())
-                                        .filter(|&i| i < input_devices.len()).unwrap_or(0);
-                                    let output_selected = cfg.loopback.as_ref().map(|s| s.as_str())
-                                        .or_else(|| cfg.device2.as_ref().and_then(|d| d.strip_prefix("out:")))
+                                    let input_selected = cfg
+                                        .device
+                                        .as_ref()
+                                        .and_then(|d| d.parse::<usize>().ok())
+                                        .filter(|&i| i < input_devices.len())
+                                        .unwrap_or(0);
+                                    let output_selected = cfg
+                                        .loopback
+                                        .as_deref()
+                                        .or_else(|| {
+                                            cfg.device2
+                                                .as_ref()
+                                                .and_then(|d| d.strip_prefix("out:"))
+                                        })
                                         .map_or(0, |s| {
-                                        output_devices.iter().position(|(_, n)| n.eq_ignore_ascii_case(s)).map(|i| i + 1).unwrap_or(0)
-                                    });
+                                            output_devices
+                                                .iter()
+                                                .position(|(_, n)| n.eq_ignore_ascii_case(s))
+                                                .map(|i| i + 1)
+                                                .unwrap_or(0)
+                                        });
                                     let mut input_state = ListState::default();
-                                    input_state.select(Some(input_selected.min(input_devices.len().saturating_sub(1))));
+                                    input_state.select(Some(
+                                        input_selected.min(input_devices.len().saturating_sub(1)),
+                                    ));
                                     let mut output_state = ListState::default();
-                                    output_state.select(Some(output_selected.min(output_devices.len())));
+                                    output_state
+                                        .select(Some(output_selected.min(output_devices.len())));
                                     settings_state = Some(SettingsState {
                                         input_devices,
                                         output_devices,
@@ -216,68 +284,124 @@ pub fn run_tui(
                                 running.store(false, Ordering::Relaxed);
                                 break;
                             }
-                            code if key.modifiers.contains(KeyModifiers::CONTROL) && key_matches(code, 'c') => {
+                            code if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && key_matches(code, 'c') =>
+                            {
                                 running.store(false, Ordering::Relaxed);
                                 break;
                             }
                             code if key_matches(code, 'r') => {
                                 recording = !recording;
-                                let msg = serde_json::json!({"type": "recording", "enabled": recording});
+                                let msg =
+                                    serde_json::json!({"type": "recording", "enabled": recording});
                                 let _ = ws_tx.send(WsOutgoing::Text(msg.to_string()));
                             }
                             code if key_matches(code, 'x') => {
                                 pending_end_session.store(true, Ordering::Relaxed);
-                                let _ = ws_tx.send(WsOutgoing::Text(r#"{"type":"end_session"}"#.into()));
+                                let _ = ws_tx
+                                    .send(WsOutgoing::Text(r#"{"type":"end_session"}"#.into()));
                                 export_msg = Some(("Завершение сессии…".into(), Instant::now()));
                             }
                             KeyCode::Tab | KeyCode::BackTab => focus = 1 - focus,
                             code if code == KeyCode::Up || key_matches(code, 'k') => {
-                                let scroll = if focus == 0 { &mut transcript_scroll } else { &mut debug_scroll };
+                                let scroll = if focus == 0 {
+                                    &mut transcript_scroll
+                                } else {
+                                    &mut debug_scroll
+                                };
                                 *scroll = Some(scroll.unwrap_or(u16::MAX).saturating_sub(1));
                             }
                             code if code == KeyCode::Down || key_matches(code, 'j') => {
-                                let scroll = if focus == 0 { &mut transcript_scroll } else { &mut debug_scroll };
+                                let scroll = if focus == 0 {
+                                    &mut transcript_scroll
+                                } else {
+                                    &mut debug_scroll
+                                };
                                 *scroll = Some(scroll.unwrap_or(0).saturating_add(1));
                             }
                             KeyCode::End => {
-                                if focus == 0 { transcript_scroll = None; } else { debug_scroll = None; }
+                                if focus == 0 {
+                                    transcript_scroll = None;
+                                } else {
+                                    debug_scroll = None;
+                                }
                             }
                             KeyCode::Home => {
-                                if focus == 0 { transcript_scroll = Some(0); } else { debug_scroll = Some(0); }
+                                if focus == 0 {
+                                    transcript_scroll = Some(0);
+                                } else {
+                                    debug_scroll = Some(0);
+                                }
                             }
                             code if focus == 0 && key_matches(code, 'e') => {
-                                let out_dir: std::path::PathBuf = cfg.export_dir
+                                let out_dir: std::path::PathBuf = cfg
+                                    .export_dir
                                     .as_deref()
                                     .map(std::path::PathBuf::from)
-                                    .unwrap_or_else(|| std::path::Path::new(output_path).parent().unwrap_or(std::path::Path::new(".")).into());
+                                    .unwrap_or_else(|| {
+                                        std::path::Path::new(output_path)
+                                            .parent()
+                                            .unwrap_or(std::path::Path::new("."))
+                                            .into()
+                                    });
                                 if let Err(e) = std::fs::create_dir_all(&out_dir) {
-                                    export_msg = Some((format!("Ошибка папки экспорта: {}", e), Instant::now()));
+                                    export_msg = Some((
+                                        format!("Ошибка папки экспорта: {}", e),
+                                        Instant::now(),
+                                    ));
                                 } else {
                                     match store.export(&out_dir) {
-                                        Ok((path, n)) if n == 0 => {
+                                        Ok((path, 0)) => {
                                             let _ = std::fs::remove_file(&path);
-                                            export_msg = Some(("Нет данных для экспорта".into(), Instant::now()));
+                                            export_msg = Some((
+                                                "Нет данных для экспорта".into(),
+                                                Instant::now(),
+                                            ));
                                         }
                                         Ok((path, n)) => {
                                             let summarize_on = cfg.summarize_enabled == Some(true);
                                             let msg = if summarize_on {
-                                                format!("Экспорт: {} строк → {}. Суммаризация…", n, path.display())
+                                                format!(
+                                                    "Экспорт: {} строк → {}. Суммаризация…",
+                                                    n,
+                                                    path.display()
+                                                )
                                             } else {
                                                 format!("Экспорт: {} строк → {}", n, path.display())
                                             };
                                             export_msg = Some((msg, Instant::now()));
                                             if summarize_on {
-                                                let url = cfg.summarize_url.as_deref().unwrap_or("http://localhost:11434");
-                                                let model = cfg.summarize_model.as_deref().unwrap_or("qwen3.5:9b");
+                                                let url = cfg
+                                                    .summarize_url
+                                                    .as_deref()
+                                                    .unwrap_or("http://localhost:11434");
+                                                let model = cfg
+                                                    .summarize_model
+                                                    .as_deref()
+                                                    .unwrap_or("qwen3.5:9b");
                                                 let prompt = cfg.summarize_prompt.as_deref().unwrap_or(
                 "Ты — суммаризатор встреч. Транскрипт ниже — запись разговора (mic = микрофон, sys = системный звук).\n\nСделай структурированную суммаризацию:\n\n1. Заголовок: «Суммаризация: [тема встречи]»\n2. УЧАСТНИКИ — «— Имя (mic/sys) — роль». Если имён нет — «— участник (mic)», «— участник (sys)»\n3. СТАТУСЫ ПО ЗАДАЧАМ — по участникам: что делает, вопросы. Пропусти «что сделал вчера», «блокеры», если нет информации. Не пиши «Не указано»\n4. РАЗБОР (если есть дискуссии) — Контекст, Суть, Решение\n5. ПРОЧЕЕ — организационные вопросы\n\nТолько русский. Только факты из транскрипта.\n\n---\n\n{text}");
-                                                let backend = cfg.summarize_backend.as_deref().unwrap_or("ollama");
+                                                let backend = cfg
+                                                    .summarize_backend
+                                                    .as_deref()
+                                                    .unwrap_or("ollama");
                                                 if backend.eq_ignore_ascii_case("ollama") {
-                                                    spawn_summarize_ollama(path, url, model, prompt, ui_tx.clone());
+                                                    spawn_summarize_ollama(
+                                                        path,
+                                                        url,
+                                                        model,
+                                                        prompt,
+                                                        ui_tx.clone(),
+                                                    );
                                                 }
                                             }
                                         }
-                                        Err(e) => export_msg = Some((format!("Ошибка экспорта: {}", e), Instant::now())),
+                                        Err(e) => {
+                                            export_msg = Some((
+                                                format!("Ошибка экспорта: {}", e),
+                                                Instant::now(),
+                                            ))
+                                        }
                                     }
                                 }
                             }
@@ -289,21 +413,45 @@ pub fn run_tui(
                     if matches!(mode, TuiMode::Settings) {
                         let st = settings_state.as_mut().unwrap();
                         if let MouseEventKind::ScrollUp = mouse.kind {
-                            let state = if st.focus == 0 { &mut st.input_state } else { &mut st.output_state };
-                            let len = if st.focus == 0 { st.input_devices.len() } else { st.output_devices.len() + 1 };
+                            let state = if st.focus == 0 {
+                                &mut st.input_state
+                            } else {
+                                &mut st.output_state
+                            };
+                            let len = if st.focus == 0 {
+                                st.input_devices.len()
+                            } else {
+                                st.output_devices.len() + 1
+                            };
                             let i = state.selected().unwrap_or(0).saturating_sub(1);
                             state.select(Some(i.min(len.saturating_sub(1))));
                         } else if let MouseEventKind::ScrollDown = mouse.kind {
-                            let state = if st.focus == 0 { &mut st.input_state } else { &mut st.output_state };
-                            let len = if st.focus == 0 { st.input_devices.len() } else { st.output_devices.len() + 1 };
+                            let state = if st.focus == 0 {
+                                &mut st.input_state
+                            } else {
+                                &mut st.output_state
+                            };
+                            let len = if st.focus == 0 {
+                                st.input_devices.len()
+                            } else {
+                                st.output_devices.len() + 1
+                            };
                             let i = state.selected().unwrap_or(0).saturating_add(1);
                             state.select(Some(i.min(len.saturating_sub(1))));
                         }
                     } else if let MouseEventKind::ScrollUp = mouse.kind {
-                        let scroll = if focus == 0 { &mut transcript_scroll } else { &mut debug_scroll };
+                        let scroll = if focus == 0 {
+                            &mut transcript_scroll
+                        } else {
+                            &mut debug_scroll
+                        };
                         *scroll = Some(scroll.unwrap_or(u16::MAX).saturating_sub(1));
                     } else if let MouseEventKind::ScrollDown = mouse.kind {
-                        let scroll = if focus == 0 { &mut transcript_scroll } else { &mut debug_scroll };
+                        let scroll = if focus == 0 {
+                            &mut transcript_scroll
+                        } else {
+                            &mut debug_scroll
+                        };
                         *scroll = Some(scroll.unwrap_or(0).saturating_add(1));
                     }
                 }
@@ -325,9 +473,18 @@ pub fn run_tui(
                         }
                     }
                     transcript_scroll = None;
-                    export_msg = Some(("Сессия завершена. Переподключение…".into(), Instant::now()));
+                    export_msg =
+                        Some(("Сессия завершена. Переподключение…".into(), Instant::now()));
                 }
-                UiEvent::Server(ServerMessage::Transcript { text, source, start_sec, end_sec, seg_id, variants, .. }) => {
+                UiEvent::Server(ServerMessage::Transcript {
+                    text,
+                    source,
+                    start_sec,
+                    end_sec,
+                    seg_id,
+                    variants,
+                    ..
+                }) => {
                     let seg_key = seg_id.as_deref().unwrap_or("");
                     if store.contains_seg_id(seg_key) {
                     } else {
@@ -423,7 +580,7 @@ pub fn run_tui(
                 }
             }
         }
-        if need_restart && restart_at.map_or(false, |t| t.elapsed() >= Duration::from_secs(2)) {
+        if need_restart && restart_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(2)) {
             break;
         }
 
@@ -573,7 +730,7 @@ pub fn run_tui(
                         _ => 0,
                     };
                     let w = prefix_len + l.text.chars().count();
-                    if w == 0 { 1u16 } else { ((w + t_inner_w - 1) / t_inner_w) as u16 }
+                    if w == 0 { 1u16 } else { w.div_ceil(t_inner_w) as u16 }
                 })
                 .sum();
             let t_visible = chunks[1].height.saturating_sub(2);
@@ -598,7 +755,7 @@ pub fn run_tui(
             for (i, l) in store.lines.iter().enumerate() {
                 let pl = match l.source { Some(AudioSource::Mic)|Some(AudioSource::Sys) => 4, _ => 0 };
                 let w = pl + l.text.chars().count();
-                let h = if w == 0 { 1 } else { ((w + t_inner_w - 1) / t_inner_w) as u16 };
+                let h = if w == 0 { 1 } else { w.div_ceil(t_inner_w) as u16 };
                 if !top_set && row + h > t_scroll_y {
                     top_line_idx = i;
                     top_set = true;
@@ -653,7 +810,7 @@ pub fn run_tui(
                 .iter()
                 .map(|l| {
                     let w = l.chars().count();
-                    if w == 0 { 1u16 } else { ((w + d_inner_w - 1) / d_inner_w) as u16 }
+                    if w == 0 { 1u16 } else { w.div_ceil(d_inner_w) as u16 }
                 })
                 .sum();
             let d_visible = chunks[2].height.saturating_sub(2);

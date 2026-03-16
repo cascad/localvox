@@ -4,6 +4,26 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_SUMMARIZE_PROMPT: &str = r#"Ты — суммаризатор встреч. Транскрипт ниже — запись разговора (mic = микрофон, sys = системный звук/удалённые участники).
+
+Сделай структурированную суммаризацию:
+
+1. Заголовок: «Суммаризация: [тема встречи]»
+
+2. УЧАСТНИКИ — «— Имя (mic/sys) — роль». Если имён нет — «— участник (mic)», «— участник (sys)».
+
+3. СТАТУСЫ ПО ЗАДАЧАМ — по участникам: что делает, вопросы. Пропусти «что сделал вчера», «блокеры», если нет информации. Не пиши «Не указано».
+
+4. РАЗБОР (если есть дискуссии) — Контекст, Суть, Решение.
+
+5. ПРОЧЕЕ — организационные вопросы, следующие шаги.
+
+Только русский. Только факты из транскрипта.
+
+---
+
+{text}"#;
+
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 pub struct ClientConfig {
     #[serde(default)]
@@ -61,6 +81,24 @@ pub fn find_config_path() -> Option<PathBuf> {
     candidates.into_iter().flatten().find(|p| p.is_file())
 }
 
+/// Конфиг по умолчанию: device и loopback = default, summarize_enabled = true.
+pub fn default_config() -> ClientConfig {
+    ClientConfig {
+        server: Some("ws://localhost:9745".into()),
+        device: Some("default".into()),
+        loopback: Some("default-output".into()),
+        device2: None,
+        output: Some("transcript.txt".into()),
+        export_dir: None,
+        summarize_enabled: Some(true),
+        summarize_backend: Some("ollama".into()),
+        summarize_url: Some("http://localhost:11434".into()),
+        summarize_model: Some("qwen3.5:9b".into()),
+        summarize_prompt: Some(DEFAULT_SUMMARIZE_PROMPT.into()),
+        client_id: Some("live".into()),
+    }
+}
+
 pub fn load_config() -> ClientConfig {
     match find_config_path() {
         Some(path) => {
@@ -76,7 +114,18 @@ pub fn load_config() -> ClientConfig {
                 }
             }
         }
-        None => ClientConfig::default(),
+        None => {
+            let cfg = default_config();
+            let path = get_config_save_path();
+            if let Ok(text) = serde_json::to_string_pretty(&cfg) {
+                if let Err(e) = std::fs::write(&path, text) {
+                    eprintln!("Не удалось сохранить конфиг по умолчанию в {}: {e}", path.display());
+                } else {
+                    eprintln!("Создан конфиг по умолчанию: {}", path.display());
+                }
+            }
+            cfg
+        }
     }
 }
 

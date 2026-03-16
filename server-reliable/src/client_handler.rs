@@ -20,9 +20,8 @@ pub type WsSender = futures_util::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     tokio_tungstenite::tungstenite::Message,
 >;
-pub type WsReceiver = futures_util::stream::SplitStream<
-    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
->;
+pub type WsReceiver =
+    futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>;
 
 fn scan_session_lag(
     session_dir: &Path,
@@ -109,10 +108,13 @@ async fn replay_completed_session(
     let (cb_tx, rx_ws) = setup_client_bridge();
     let _ = ws_sender
         .send(tokio_tungstenite::tungstenite::Message::Text(
-            serde_json::json!({"type": "session", "state": "resuming", "session_id": &session.id}).to_string(),
+            serde_json::json!({"type": "session", "state": "resuming", "session_id": &session.id})
+                .to_string(),
         ))
         .await;
-    session.output_sink.replay_to_client_no_register(cb_tx, last_seq);
+    session
+        .output_sink
+        .replay_to_client_no_register(cb_tx, last_seq);
     let send_task = spawn_ws_forwarder(rx_ws, ws_sender);
     let _ = send_task.await;
     Ok(())
@@ -173,7 +175,11 @@ fn handle_text_msg(
                 *writer_flushed = true;
                 session.end_of_stream.store(true, Ordering::Relaxed);
                 for (path, src) in writer.close()? {
-                    info!("Segment ready src{}: {} -> queue (final)", src, path.display());
+                    info!(
+                        "Segment ready src{}: {} -> queue (final)",
+                        src,
+                        path.display()
+                    );
                     processor.enqueue(path, src);
                 }
                 processor.wait_until_empty(3600.0);
@@ -186,7 +192,10 @@ fn handle_text_msg(
                         registry.remove_client_session(cid);
                     }
                     registry.remove(&session.id);
-                    info!("Session ended by client, marked done and removed: {}", session.id);
+                    info!(
+                        "Session ended by client, marked done and removed: {}",
+                        session.id
+                    );
                 }
             }
         }
@@ -205,7 +214,15 @@ async fn run_session_loop(
 ) -> Result<bool> {
     let mut writer_flushed = false;
     if let Some(text) = pending_first_msg {
-        handle_text_msg(text, writer, &mut writer_flushed, session, processor, output_sink, registry)?;
+        handle_text_msg(
+            text,
+            writer,
+            &mut writer_flushed,
+            session,
+            processor,
+            output_sink,
+            registry,
+        )?;
     }
     while let Some(msg) = ws_receiver.next().await {
         let msg = match msg {
@@ -231,7 +248,13 @@ async fn run_session_loop(
             }
             tokio_tungstenite::tungstenite::Message::Text(text) => {
                 handle_text_msg(
-                    &text, writer, &mut writer_flushed, session, processor, output_sink, registry,
+                    &text,
+                    writer,
+                    &mut writer_flushed,
+                    session,
+                    processor,
+                    output_sink,
+                    registry,
                 )?;
             }
             _ => {}
@@ -369,9 +392,11 @@ pub async fn handle_client(
         == Some("config");
 
     let client_id: Option<String> = if is_config {
-        first_json
-            .as_ref()
-            .and_then(|v| v.get("client_id").and_then(|x| x.as_str()).map(String::from))
+        first_json.as_ref().and_then(|v| {
+            v.get("client_id")
+                .and_then(|x| x.as_str())
+                .map(String::from)
+        })
     } else {
         None
     };
@@ -428,7 +453,10 @@ pub async fn handle_client(
 
     // --- Handle existing session ---
 
-    if let Some(session) = is_resume_candidate.then(|| registry.get(&session_id)).flatten() {
+    if let Some(session) = is_resume_candidate
+        .then(|| registry.get(&session_id))
+        .flatten()
+    {
         if session.end_of_stream.load(Ordering::Relaxed) {
             return replay_completed_session(ws_sender, &session, last_seq).await;
         }
@@ -451,7 +479,10 @@ pub async fn handle_client(
             writer
                 .resume_session(session.dir.clone(), source_count.clamp(1, 2))
                 .map_err(|e| anyhow::anyhow!("resume_session: {}", e))?;
-            info!("Live session resumed: {} (client: {:?})", session_id, client_id);
+            info!(
+                "Live session resumed: {} (client: {:?})",
+                session_id, client_id
+            );
 
             let processor = session.processor.clone();
             let output_sink = session.output_sink.clone();
@@ -476,7 +507,15 @@ pub async fn handle_client(
 
             output_sink.clear_client();
             poll_lag.abort();
-            handle_disconnect(&session, &processor, &output_sink, &mut writer, writer_flushed, &settings, &registry);
+            handle_disconnect(
+                &session,
+                &processor,
+                &output_sink,
+                &mut writer,
+                writer_flushed,
+                &settings,
+                &registry,
+            );
             let _ = send_task.await;
             return Ok(());
         }
@@ -530,7 +569,8 @@ pub async fn handle_client(
 
     let _ = ws_sender
         .send(tokio_tungstenite::tungstenite::Message::Text(
-            serde_json::json!({"type": "session", "state": "new", "session_id": &session_id}).to_string(),
+            serde_json::json!({"type": "session", "state": "new", "session_id": &session_id})
+                .to_string(),
         ))
         .await;
 
@@ -556,7 +596,15 @@ pub async fn handle_client(
 
     output_sink.clear_client();
     poll_lag.abort();
-    handle_disconnect(&session, &processor, &output_sink, &mut writer, writer_flushed, &settings, &registry);
+    handle_disconnect(
+        &session,
+        &processor,
+        &output_sink,
+        &mut writer,
+        writer_flushed,
+        &settings,
+        &registry,
+    );
     let _ = send_task.await;
 
     Ok(())

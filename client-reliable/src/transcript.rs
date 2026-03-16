@@ -23,10 +23,8 @@ impl TranscriptStore {
     /// Load from file and open for append.
     pub fn load(path: &str) -> Result<Self> {
         let lines = Self::parse_file(path);
-        let known_seg_ids: HashSet<String> = lines
-            .iter()
-            .filter_map(|l| l.seg_id.clone())
-            .collect();
+        let known_seg_ids: HashSet<String> =
+            lines.iter().filter_map(|l| l.seg_id.clone()).collect();
         let out_file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -42,7 +40,9 @@ impl TranscriptStore {
 
     /// Parse transcript.txt into TranscriptLine vec.
     fn parse_file(path: &str) -> Vec<TranscriptLine> {
-        let Ok(content) = std::fs::read_to_string(path) else { return vec![] };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return vec![];
+        };
         let mut out = Vec::new();
         let mut current_segment_id: Option<String> = None;
         for line in content.lines() {
@@ -79,8 +79,8 @@ impl TranscriptStore {
                     } else {
                         continue;
                     }
-                } else if rest.starts_with("mic: ") {
-                    (Some(0u8), None, rest[5..].to_string())
+                } else if let Some(stripped) = rest.strip_prefix("mic: ") {
+                    (Some(0u8), None, stripped.to_string())
                 } else if rest.starts_with("sys [") {
                     if let Some(end) = rest.find("]: ") {
                         let seg = rest[5..end].to_string();
@@ -88,8 +88,8 @@ impl TranscriptStore {
                     } else {
                         continue;
                     }
-                } else if rest.starts_with("sys: ") {
-                    (Some(1u8), None, rest[5..].to_string())
+                } else if let Some(stripped) = rest.strip_prefix("sys: ") {
+                    (Some(1u8), None, stripped.to_string())
                 } else {
                     continue;
                 };
@@ -121,6 +121,7 @@ impl TranscriptStore {
     }
 
     /// Append segment with variants (LLM correction).
+    #[allow(clippy::too_many_arguments)]
     pub fn append_variants(
         &mut self,
         text: &str,
@@ -144,14 +145,11 @@ impl TranscriptStore {
         }
         for v in variants {
             let line = format!("  [{}] {}", v.model, v.text);
-            self.lines.push(TranscriptLine::new(
-                line,
-                source,
-                seg_id_owned.clone(),
-            ));
+            self.lines
+                .push(TranscriptLine::new(line, source, seg_id_owned.clone()));
         }
         if write_to_file {
-            let _ = self.write_variants(seg_id.as_deref(), source, variants, start_sec, end_sec);
+            let _ = self.write_variants(seg_id, source, variants, start_sec, end_sec);
         }
         self.drain_excess();
     }
@@ -159,10 +157,7 @@ impl TranscriptStore {
     fn write_plain(&mut self, line: &TranscriptLine) -> Result<()> {
         if let Some(ref mut f) = self.out_file {
             let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
-            let src_label = line
-                .source
-                .map(|s| s.label())
-                .unwrap_or("src");
+            let src_label = line.source.map(|s| s.label()).unwrap_or("src");
             let seg_part = line
                 .seg_id
                 .as_ref()
@@ -194,7 +189,11 @@ impl TranscriptStore {
             };
             let sid = seg_id.unwrap_or("?");
             writeln!(f)?;
-            writeln!(f, "=== SEGMENT {} | {} | {} | {} ===", sid, time_range, src_label, ts)?;
+            writeln!(
+                f,
+                "=== SEGMENT {} | {} | {} | {} ===",
+                sid, time_range, src_label, ts
+            )?;
             for v in variants {
                 writeln!(f, "  {}: {}", v.model, v.text)?;
             }
@@ -230,11 +229,7 @@ impl TranscriptStore {
     pub fn drain_excess(&mut self) {
         if self.lines.len() > MAX_TRANSCRIPT_LINES {
             self.lines.drain(..self.lines.len() - MAX_TRANSCRIPT_LINES);
-            self.known_seg_ids = self
-                .lines
-                .iter()
-                .filter_map(|l| l.seg_id.clone())
-                .collect();
+            self.known_seg_ids = self.lines.iter().filter_map(|l| l.seg_id.clone()).collect();
         }
     }
 
@@ -260,11 +255,8 @@ impl TranscriptStore {
                     let rest = line[pos + 2..].trim_start();
                     let clean = if rest.starts_with("mic [") || rest.starts_with("sys [") {
                         let prefix = &rest[..3];
-                        if let Some(end) = rest.find("]: ") {
-                            Some(format!("{}: {}", prefix, &rest[end + 3..]))
-                        } else {
-                            None
-                        }
+                        rest.find("]: ")
+                            .map(|end| format!("{}: {}", prefix, &rest[end + 3..]))
                     } else if rest.starts_with("mic: ") || rest.starts_with("sys: ") {
                         Some(rest.to_string())
                     } else {
@@ -349,11 +341,8 @@ pub fn export_trimmed_transcript(
             if let Some(pos) = line.find("] ") {
                 let rest = line[pos + 2..].trim_start();
                 let clean = if rest.starts_with("mic [") || rest.starts_with("sys [") {
-                    if let Some(end) = rest.find("]: ") {
-                        Some(format!("{}: {}", &rest[..3], &rest[end + 3..]))
-                    } else {
-                        None
-                    }
+                    rest.find("]: ")
+                        .map(|end| format!("{}: {}", &rest[..3], &rest[end + 3..]))
                 } else if rest.starts_with("mic: ") || rest.starts_with("sys: ") {
                     Some(rest.to_string())
                 } else {

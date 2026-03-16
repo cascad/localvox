@@ -1,88 +1,126 @@
 # LocalVox
 
-Сервер потоковой транскрипции речи с ансамблем Whisper + GigaAM и LLM-корректором. TUI-клиент с микрофоном и loopback системного звука. Для локальной распознавания речи в реальном времени.
+**Клиент-серверная система потоковой транскрипции речи** — не совсем realtime, но с задержкой в несколько секунд. Сервер: ансамбль Whisper + GigaAM и LLM-корректор (Ollama). TUI-клиент: микрофон + loopback системного звука, запись в файл, экспорт и суммаризация.
 
 ## Quickstart
 
+### Сервер
+
+```bash
+# Из корня репо (Linux/macOS)
+chmod +x tools/setup.sh
+./tools/setup.sh
+```
+
+Скрипт скачает модели, установит nvidia-container-toolkit и запустит сервер через Docker Compose. После — сервер работает на `ws://localhost:9745`.
+
+На Windows: WSL или Git Bash (`bash tools/setup.sh`).
+
+### Клиент
+
+Скачать бинарник из [Releases](https://github.com/cascad/localvox/releases) и запустить. При первом запуске автоматически создаётся `client-config.json` с дефолтами — если сервер на той же машине, работает из коробки. Если на другой — поменять `server` в конфиге.
+
+Или из исходников:
+
+```bash
+cargo run -p live-transcribe-client-reliable
+```
+
+---
+
+## Подробнее
+
+### Архитектура
+
+- **Сервер** — WebSocket, принимает аудио, распознаёт через Whisper/GigaAM, опционально корректирует через LLM
+- **Клиент** — TUI (ratatui), захватывает микрофон и/или системный звук, отправляет на сервер, отображает транскрипцию
+
+### Развёртывание сервера (Docker)
+
+`tools/setup.sh` делает всё за вас:
+1. Устанавливает nvidia-container-toolkit (Ubuntu/Debian) — пропуск: `SKIP_NVIDIA_TOOLKIT=1`
+2. Скачивает Whisper, GigaAM, Parakeet в `models/` — Parakeet: `SKIP_PARAKEET=1`
+3. Ollama: `ollama pull qwen3.5:4b` + `qwen3.5:9b`
+4. `docker compose pull && docker compose up -d`
+
+**Требования:** Docker, NVIDIA GPU + драйверы. На Ubuntu/Debian скрипт сам поставит toolkit.
+
+Управление: `docker compose down` / `docker compose up -d`.
+
+### Развёртывание сервера (Cargo)
+
 **1. Скачать модели**
 
-Пути относительно корня репозитория (откуда запускаете `cargo`):
+В `settings.json` задаётся массив `models` — можно использовать одну, две или все три.
 
-- **Whisper:** создать папку `models/whisper/`, скачать [ggml-large-v3-turbo.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin) и положить туда. Итог: `models/whisper/ggml-large-v3-turbo.bin`
-- **GigaAM** (опционально): создать папку `models/gigaam-v3-ctc-ru/`, скачать [model.int8.onnx](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16/resolve/main/model.int8.onnx) и [tokens.txt](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16/resolve/main/tokens.txt) туда
-- **Ollama** (опционально, для LLM-корректора): установить [Ollama](https://ollama.com), затем `ollama pull qwen2.5:7b-instruct`. Включить в `settings.json`: `llm_correction_enabled: true`
+| Модель | Описание | Скачать |
+|--------|----------|---------|
+| **Whisper** | GGML через whisper.cpp. Обязательна. CUDA/CPU. | Папка `models/whisper/`, файл [ggml-large-v3-turbo.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin) |
+| **GigaAM** | NeMo CTC (sherpa-onnx), русский. Опционально. | Папка `models/gigaam-v3-ctc-ru/`: [model.int8.onnx](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16/resolve/main/model.int8.onnx), [tokens.txt](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-ctc-giga-am-v3-russian-2025-12-16/resolve/main/tokens.txt). Или `.\tools\download_gigaam.ps1` |
+| **Parakeet** | NeMo TDT 0.6B (sherpa-onnx), 25 языков. Опционально. | `.\tools\download_parakeet.ps1` или [архив](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2) → `models/parakeet-tdt-0.6b-v3-int8/` |
 
-**2. Настроить сервер**
+**Ollama** (опционально): установить [Ollama](https://ollama.com), `ollama pull qwen3.5:4b`. В `settings.json`: `llm_correction_enabled: true`.
+
+**2. Настроить и запустить**
 
 ```bash
 cp server-reliable/settings.example.json server-reliable/settings.json
-# Отредактировать model_path и при необходимости cuda_path
-```
+# Отредактировать models[].model_path под свои пути
 
-**3. Запуск**
-
-```bash
-# Терминал 1
 cargo run -p live-transcribe-server-reliable --release -- --host 0.0.0.0 --port 9745
-
-# Терминал 2
-cargo run -p live-transcribe-client-reliable -- --device 0 --loopback Razer --output transcript.txt
 ```
 
-`--loopback Razer` — захват системного звука. Без него — только микрофон. F2 — настройки в TUI.
+Пример `models` в settings.json:
+```json
+"models": [
+  { "type": "whisper", "model_path": "models/whisper/ggml-large-v3-turbo.bin", "use_gpu": true },
+  { "type": "gigaam", "model_path": "models/gigaam-v3-ctc-ru", "use_gpu": true },
+  { "type": "parakeet", "model_path": "models/parakeet-tdt-0.6b-v3-int8", "use_gpu": true }
+]
+```
 
-**Loopback:** `--loopback default-output` — дефолтный вывод системы (работает на Windows и macOS 14.2+). Или имя/индекс устройства.
+### Клиент (TUI)
 
-## Возможности
+- Микрофон + loopback системного звука (Windows: WASAPI, macOS: BlackHole и т.п.)
+- Автогенерация `client-config.json` при первом запуске (`device: "default"`, `loopback: "default-output"`, `summarize_enabled: true`)
+- **Клавиши:** `r` — запись, `x` — завершить сессию, `e` — экспорт + суммаризация, `F2` — настройки, `q`/Esc — выход
+- Прокрутка: ↑↓ / jk / Tab, Home/End
 
-### Сервер: конвейер распознавания
+`--loopback default-output` — дефолтный вывод системы. `--loopback Razer` — по имени устройства. Без `--loopback` — только микрофон.
 
-Сервер обрабатывает аудио по цепочке. Каждый этап можно включить или выключить в `settings.json`:
+### Конвейер распознавания
 
-1. **Whisper (GGML)** — базовая модель, всегда работает. whisper.cpp, CUDA/CPU.
+Каждый этап настраивается в `settings.json`:
 
-2. **GigaAM (NeMo CTC)** — вторая модель через sherpa-onnx. Опциональна: задайте `gigaam_model_dir` и `ensemble_enabled: true`. Запускается параллельно с Whisper.
+1. **ASR-модели** — Whisper (обязательна), GigaAM и/или Parakeet (опционально). При нескольких моделях запускаются параллельно.
+2. **Ансамбль** — word-level alignment (Levenshtein), fallback при пустом результате. Per-model фильтр галлюцинаций.
+3. **LLM-корректор** — Ollama, получает все варианты + merged, выбирает лучший. `llm_correction_enabled: true`.
 
-3. **Ансамбль** — при `ensemble_enabled` Whisper и GigaAM запускаются параллельно. Алгоритмический мерж (word-level alignment) даёт промежуточный результат, но основная арбитрация — в LLM. Если GigaAM выключен или пустой — идёт только Whisper. Переключатель: `ensemble_enabled`.
+**Режимы:** только Whisper | Whisper + GigaAM/Parakeet | с LLM-корректором.
 
-4. **LLM-корректор** — постобработка через Ollama. Получает все три варианта (Whisper, GigaAM, algorithmic merged) и выбирает/объединяет лучший, исправляет ошибки. Именно здесь происходит реальный выбор между моделями. Переключатель: `llm_correction_enabled`. Требует запущенный Ollama.
-
-**Режимы работы:**
-- Только Whisper: `ensemble_enabled: false`
-- Whisper + GigaAM: `ensemble_enabled: true`, `gigaam_model_dir` задан
-- С корректором: `llm_correction_enabled: true`
-
-### Остальное
+### Прочее
 
 - **Reliable-буфер** — дисковая очередь аудио, VAD-сегментация, overlap-мерж
-- **TUI-клиент** — ratatui, микрофон + loopback системного звука, запись в файл
+- **CPU-only сборка** (CI, без GPU): `cargo build -p live-transcribe-server-reliable --no-default-features`
+
+## Релизы
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+После push тега `v*` GitHub Actions собирает:
+- **Клиент** — Windows (x64), macOS (x64, arm64). [Releases](https://github.com/cascad/localvox/releases)
+- **Сервер (Docker)** — `ghcr.io/cascad/localvox:v0.1.0` (GPU), `ghcr.io/cascad/localvox-cpu:v0.1.0` (CPU)
 
 ## Бенчмарк SOVA
 
-Сравнение с эталоном на датасете [bond005/sova_rudevices](https://huggingface.co/datasets/bond005/sova_rudevices):
-
 ```bash
-# Создать venv и установить зависимости
-python -m venv venv
-.\venv\Scripts\activate   # Windows
-# source venv/bin/activate  # Linux/macOS
-
+python -m venv venv && source venv/bin/activate  # Windows: .\venv\Scripts\activate
 pip install websockets jiwer datasets
 
-# Запустить сервер (в отдельном терминале)
-cargo run -p live-transcribe-server-reliable --release -- --host 0.0.0.0 --port 9745
-
-# Запустить бенчмарк
 python tools/bench_sova.py --dataset hf:bond005/sova_rudevices --split test --limit 100 -v -o tools/sova_results.json
 ```
 
-По умолчанию подключается к `ws://localhost:9745`. Другой сервер: `--server ws://host:port`.
-
-Другие источники датасета:
-```bash
-# Локальная папка с manifest.json (path, transcription)
-python tools/bench_sova.py --dataset local:./sova_test --limit 50
-
-# Папка с .wav и .txt с одинаковыми именами
-python tools/bench_sova.py --dataset dir:./wavs --limit 50
-```
+Другие источники: `--dataset local:./folder` (manifest.jsonl) или `--dataset dir:./wavs` (.wav + .txt).

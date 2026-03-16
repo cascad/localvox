@@ -105,7 +105,8 @@ fn default_llm_prompt_single() -> String {
      Контекст предыдущих фраз: {context_str}\n\
      Текст: \"{merged_text}\"\n\
      Важно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\n\
-     Верни только исправленный текст, без кавычек и пояснений.".to_string()
+     Верни только исправленный текст, без кавычек и пояснений."
+        .to_string()
 }
 fn default_llm_prompt_ensemble() -> String {
     "Даны варианты распознавания одного аудиофрагмента.\n\
@@ -114,7 +115,8 @@ fn default_llm_prompt_ensemble() -> String {
      Контекст предыдущих фраз: {context_str}\n\n\
      Выбери лучший вариант или объедини их. Исправь явные ошибки распознавания.\n\
      Важно: отвечай ТОЛЬКО на русском языке, не переводи на другие языки.\n\
-     Верни только исправленный текст, без кавычек и пояснений.".to_string()
+     Верни только исправленный текст, без кавычек и пояснений."
+        .to_string()
 }
 
 fn default_llm_timeout_sec() -> u64 {
@@ -246,7 +248,11 @@ fn settings_candidates() -> Vec<PathBuf> {
             out.push(dir.join("settings.json"));
             out.push(dir.join("settings.docker.json"));
             out.push(dir.join("..").join("server-reliable").join("settings.json"));
-            out.push(dir.join("..").join("server-reliable").join("settings.docker.json"));
+            out.push(
+                dir.join("..")
+                    .join("server-reliable")
+                    .join("settings.docker.json"),
+            );
             out.push(dir.join("..").join("settings.json"));
             out.push(dir.join("..").join("settings.docker.json"));
         }
@@ -259,8 +265,16 @@ fn settings_candidates() -> Vec<PathBuf> {
     }
     out.push(PathBuf::from("settings.json"));
     out.push(PathBuf::from("settings.docker.json"));
-    out.push(PathBuf::from("..").join("server-reliable").join("settings.json"));
-    out.push(PathBuf::from("..").join("server-reliable").join("settings.docker.json"));
+    out.push(
+        PathBuf::from("..")
+            .join("server-reliable")
+            .join("settings.json"),
+    );
+    out.push(
+        PathBuf::from("..")
+            .join("server-reliable")
+            .join("settings.docker.json"),
+    );
     out.push(PathBuf::from("..").join("settings.json"));
     out.push(PathBuf::from("..").join("settings.docker.json"));
     out
@@ -284,7 +298,8 @@ mod tests {
 
     #[test]
     fn test_settings_parse_json() {
-        let json = r#"{"model_path": "/path/model.bin", "language": "en", "ensemble_enabled": true}"#;
+        let json =
+            r#"{"model_path": "/path/model.bin", "language": "en", "ensemble_enabled": true}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.model_path.as_deref(), Some("/path/model.bin"));
         assert_eq!(s.language, "en");
@@ -336,11 +351,17 @@ pub fn load_settings(model_path_override: Option<&str>) -> Result<Settings> {
                 .and_then(|v| v.get("llm_correction_enabled").and_then(|b| b.as_bool()))
                 .unwrap_or(false);
             tracing::info!("Config: {} (llm_correction={})", path.display(), llm_on);
-            let mut settings: Settings = serde_json::from_str(&s)
-                .with_context(|| format!("parse {}", path.display()))?;
+            let mut settings: Settings =
+                serde_json::from_str(&s).with_context(|| format!("parse {}", path.display()))?;
             if let Some(p) = model_path_override {
                 settings.model_path = Some(p.to_string());
-            } else if settings.model_path.as_deref().unwrap_or("").trim().is_empty() {
+            } else if settings
+                .model_path
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+            {
                 settings.model_path = None;
             }
             return Ok(settings);

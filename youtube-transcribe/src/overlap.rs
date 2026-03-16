@@ -90,19 +90,26 @@ pub fn merge_overlap(prev_tail: &str, new_text: &str) -> (String, String, bool) 
     };
 
     // Server may send pre-merged "е даже" (completion of "умны"->"умные"). Glue without space.
-    let no_space = best_len == 0
-        && !merged.is_empty()
-        && !prev_words.is_empty()
-        && {
-            let first_emit = words.first().map(|s| s.trim_matches(|c: char| ",.!?;:".contains(c)));
-            let last_prev = prev_words.last().unwrap_or(&"").trim_matches(|c: char| ",.!?;:".contains(c));
-            first_emit.map_or(false, |f| {
-                f.chars().count() == 1
-                    && f.chars().next().map_or(false, |c| c.is_alphabetic() && !c.is_ascii())
-                    && last_prev.chars().count() >= 3
-                    && last_prev.chars().last().map_or(false, |c| c.is_alphabetic())
-            })
-        };
+    let no_space = best_len == 0 && !merged.is_empty() && !prev_words.is_empty() && {
+        let first_emit = words
+            .first()
+            .map(|s| s.trim_matches(|c: char| ",.!?;:".contains(c)));
+        let last_prev = prev_words
+            .last()
+            .unwrap_or(&"")
+            .trim_matches(|c: char| ",.!?;:".contains(c));
+        first_emit.map_or(false, |f| {
+            f.chars().count() == 1
+                && f.chars()
+                    .next()
+                    .map_or(false, |c| c.is_alphabetic() && !c.is_ascii())
+                && last_prev.chars().count() >= 3
+                && last_prev
+                    .chars()
+                    .last()
+                    .map_or(false, |c| c.is_alphabetic())
+        })
+    };
 
     (merged, tail, no_space)
 }
@@ -128,10 +135,7 @@ mod tests {
     #[test]
     fn test_umny_umnye() {
         // "умны" / "умные" - partial word overlap, "е" glues without space
-        let r = merge_chunks(&[
-            "Мы все недостаточно умны",
-            "умные даже ученые ракетчик",
-        ]);
+        let r = merge_chunks(&["Мы все недостаточно умны", "умные даже ученые ракетчик"]);
         assert!(!r.contains("умны умные"), "should not duplicate: {}", r);
         assert!(r.contains("умные"), "should have умные: {}", r);
         assert!(!r.contains("умны е "), "е should glue to умны: {}", r);
@@ -140,10 +144,7 @@ mod tests {
     #[test]
     fn test_umny_umnye_server_premerged() {
         // Server sends "е даже" (pre-merged), client must glue "умны" + "е"
-        let r = merge_chunks(&[
-            "Мы все недостаточно умны",
-            "е даже ученые ракетчик",
-        ]);
+        let r = merge_chunks(&["Мы все недостаточно умны", "е даже ученые ракетчик"]);
         assert!(!r.contains("умны е "), "е should glue: {}", r);
         assert!(r.contains("умные"), "should glue to умные: {}", r);
     }
@@ -154,25 +155,27 @@ mod tests {
             "прошу говорите со мной как с мальчишкой или лаборатором",
             "С мальчишкой или лаборатором большой успех не является",
         ]);
-        assert!(!r.contains("лаборатором С мальчишкой"), "should not duplicate phrase: {}", r);
-        assert!(r.contains("большой успех"), "should have continuation: {}", r);
+        assert!(
+            !r.contains("лаборатором С мальчишкой"),
+            "should not duplicate phrase: {}",
+            r
+        );
+        assert!(
+            r.contains("большой успех"),
+            "should have continuation: {}",
+            r
+        );
     }
 
     #[test]
     fn test_exact_word_overlap() {
-        let r = merge_chunks(&[
-            "привет как дела",
-            "как дела отлично",
-        ]);
+        let r = merge_chunks(&["привет как дела", "как дела отлично"]);
         assert_eq!(r, "привет как дела отлично");
     }
 
     #[test]
     fn test_full_duplicate_chunk() {
-        let r = merge_chunks(&[
-            "Привет как дела",
-            "Привет как дела отлично",
-        ]);
+        let r = merge_chunks(&["Привет как дела", "Привет как дела отлично"]);
         assert_eq!(r, "Привет как дела отлично");
     }
 }

@@ -3,7 +3,9 @@
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Mutex;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 use crate::hallucination;
 
@@ -38,7 +40,10 @@ impl WhisperAdapter {
     }
 
     fn get_or_create_state(&self) -> Result<WhisperState> {
-        let mut pool = self.state_pool.lock().map_err(|_| anyhow::anyhow!("lock"))?;
+        let mut pool = self
+            .state_pool
+            .lock()
+            .map_err(|_| anyhow::anyhow!("lock"))?;
         if let Some(state) = pool.pop() {
             return Ok(state);
         }
@@ -70,12 +75,7 @@ impl super::AsrModel for WhisperAdapter {
         }
     }
 
-    fn transcribe(
-        &self,
-        _wav_path: &Path,
-        samples: &[f32],
-        language: &str,
-    ) -> Result<String> {
+    fn transcribe(&self, _wav_path: &Path, samples: &[f32], language: &str) -> Result<String> {
         if samples.is_empty() {
             return Ok(String::new());
         }

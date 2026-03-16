@@ -135,7 +135,12 @@ async fn main() -> Result<()> {
     whisper_rs::print_system_info();
 
     // Таблица: модель → CPU/GPU
-    let name_w = models.iter().map(|m| m.name().len()).max().unwrap_or(8).max(6);
+    let name_w = models
+        .iter()
+        .map(|m| m.name().len())
+        .max()
+        .unwrap_or(8)
+        .max(6);
     info!("ASR модели (кто на чём):");
     info!("  {:<name_w$} | Через", "Модель", name_w = name_w);
     info!("  {:-<name_w$}-+-------", "", name_w = name_w);
@@ -143,26 +148,26 @@ async fn main() -> Result<()> {
         info!("  {:<name_w$} | {}", m.name(), m.backend(), name_w = name_w);
     }
 
-    let llm_dispatcher: Option<Arc<dispatcher::LlmDispatcher>> =
-        if settings.llm_correction_enabled {
-            info!(
-                "LLM correction enabled: {} @ {} (global pool)",
-                settings.llm_model, settings.ollama_url
-            );
-            let llm = Arc::new(llm_corrector::LlmCorrector::new(
-                &settings.ollama_url,
-                &settings.llm_model,
-                &settings.llm_prompt_single,
-                &settings.llm_prompt_ensemble,
-                settings.llm_timeout_sec,
-            ));
-            Some(Arc::new(dispatcher::LlmDispatcher::new(
-                llm,
-                settings.llm_pool_size,
-            )))
-        } else {
-            None
-        };
+    let llm_dispatcher: Option<Arc<dispatcher::LlmDispatcher>> = if settings.llm_correction_enabled
+    {
+        info!(
+            "LLM correction enabled: {} @ {} (global pool)",
+            settings.llm_model, settings.ollama_url
+        );
+        let llm = Arc::new(llm_corrector::LlmCorrector::new(
+            &settings.ollama_url,
+            &settings.llm_model,
+            &settings.llm_prompt_single,
+            &settings.llm_prompt_ensemble,
+            settings.llm_timeout_sec,
+        ));
+        Some(Arc::new(dispatcher::LlmDispatcher::new(
+            llm,
+            settings.llm_pool_size,
+        )))
+    } else {
+        None
+    };
 
     let asr_dispatcher = Arc::new(dispatcher::AsrDispatcher::new(
         models,

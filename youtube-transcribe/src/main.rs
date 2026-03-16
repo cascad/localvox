@@ -18,7 +18,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind,
+};
 
 /// Физическая клавиша (не зависит от раскладки). Русская ЙЦУКЕН → Latin QWERTY.
 fn physical_key(c: char) -> char {
@@ -59,13 +61,15 @@ fn key_matches(key: KeyCode, expected: char) -> bool {
         _ => false,
     }
 }
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 
-use config::{load_settings, resolve_ffmpeg, resolve_ffmpeg_location_for_ytdlp, resolve_js_runtime, resolve_yt_dlp};
+use config::{
+    load_settings, resolve_ffmpeg, resolve_ffmpeg_location_for_ytdlp, resolve_js_runtime,
+    resolve_yt_dlp,
+};
 use state::{JobStatus, QueueState};
 use worker::run_worker;
-
 
 #[derive(Parser)]
 #[command(name = "youtube-transcribe")]
@@ -113,11 +117,11 @@ fn main() -> Result<()> {
         .state_file
         .or_else(|| settings.state_file.as_ref().map(PathBuf::from))
         .unwrap_or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("queue.json")))
-            .unwrap_or_else(|| PathBuf::from("queue.json"))
-    });
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("queue.json")))
+                .unwrap_or_else(|| PathBuf::from("queue.json"))
+        });
 
     let server = if cli.server != "ws://127.0.0.1:9745" {
         cli.server.clone()
@@ -143,7 +147,8 @@ fn main() -> Result<()> {
         }
         for url in &cli.urls {
             if url::Url::parse(url).is_ok() {
-                let out_name = output_dir.join(format!("{}.txt", uuid::Uuid::new_v4().simple().to_string()));
+                let out_name =
+                    output_dir.join(format!("{}.txt", uuid::Uuid::new_v4().simple().to_string()));
                 s.add_job(url.clone(), out_name);
             }
         }
@@ -185,15 +190,14 @@ fn open_file(path: &str) -> std::io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("xdg-open").arg(path).spawn().map(|_| ())
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
     }
 }
 
-fn run_tui(
-    state: Arc<Mutex<QueueState>>,
-    state_path: PathBuf,
-    output_dir: PathBuf,
-) -> Result<()> {
+fn run_tui(state: Arc<Mutex<QueueState>>, state_path: PathBuf, output_dir: PathBuf) -> Result<()> {
     terminal::enable_raw_mode()?;
     execute!(io::stdout(), EnableMouseCapture)?;
     execute!(io::stdout(), EnterAlternateScreen)?;
@@ -226,7 +230,10 @@ fn run_tui(
                                 "в работе".into()
                             };
                             let txt = if let Some(ref ss) = j.server_status {
-                                format!("{} | asr:{} llm:{} lag:{:.0}с", base, ss.task_queue_size, ss.llm_queue, ss.lag_sec)
+                                format!(
+                                    "{} | asr:{} llm:{} lag:{:.0}с",
+                                    base, ss.task_queue_size, ss.llm_queue, ss.lag_sec
+                                )
                             } else {
                                 base
                             };
@@ -241,7 +248,10 @@ fn run_tui(
                     let short = j.url.chars().take(40).collect::<String>();
                     let path_hint = match &j.status {
                         JobStatus::Done => {
-                            let name = std::path::Path::new(&j.output_path).file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+                            let name = std::path::Path::new(&j.output_path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy())
+                                .unwrap_or_default();
                             format!(" → {}", name)
                         }
                         _ => String::new(),
@@ -254,13 +264,16 @@ fn run_tui(
                 })
                 .collect();
 
-            let selected_path = list_state.selected().and_then(|i| s.jobs.get(i)).and_then(|j| {
-                if matches!(j.status, JobStatus::Done) {
-                    Some(j.output_path.clone())
-                } else {
-                    None
-                }
-            });
+            let selected_path = list_state
+                .selected()
+                .and_then(|i| s.jobs.get(i))
+                .and_then(|j| {
+                    if matches!(j.status, JobStatus::Done) {
+                        Some(j.output_path.clone())
+                    } else {
+                        None
+                    }
+                });
             let title = Paragraph::new("YouTube Transcribe Queue (a: добавить, o: открыть, j/k/↑↓: навигация, PgUp/PgDn: страница, колёсико: скролл, q: выход)")
                 .block(Block::default().borders(Borders::ALL).title(" Очередь "));
             terminal.draw(|f| {
@@ -287,9 +300,15 @@ fn run_tui(
                 } else if let Some(ref p) = selected_path {
                     format!("Файл: {} | State: {}", p, state_path.display())
                 } else {
-                    format!("State: {} | Output: {}", state_path.display(), output_dir.display())
+                    format!(
+                        "State: {} | Output: {}",
+                        state_path.display(),
+                        output_dir.display()
+                    )
                 };
-                let footer = Paragraph::new(help).block(Block::default().borders(Borders::ALL)).wrap(Wrap { trim: true });
+                let footer = Paragraph::new(help)
+                    .block(Block::default().borders(Borders::ALL))
+                    .wrap(Wrap { trim: true });
                 f.render_widget(footer, chunks[2]);
             })?;
         }
@@ -305,7 +324,10 @@ fn run_tui(
                                 input_mode = false;
                                 if !url.is_empty() {
                                     if url::Url::parse(&url).is_ok() {
-                                        let out_name = output_dir.join(format!("{}.txt", uuid::Uuid::new_v4().simple().to_string()));
+                                        let out_name = output_dir.join(format!(
+                                            "{}.txt",
+                                            uuid::Uuid::new_v4().simple().to_string()
+                                        ));
                                         let mut s = state.lock().unwrap();
                                         s.add_job(url, out_name);
                                         s.save(&state_path)?;
@@ -339,7 +361,9 @@ fn run_tui(
                             code if key_matches(code, 'o') => {
                                 if let Some(i) = list_state.selected() {
                                     let path = state.lock().unwrap().jobs.get(i).and_then(|j| {
-                                        if matches!(j.status, JobStatus::Done) && std::path::Path::new(&j.output_path).is_file() {
+                                        if matches!(j.status, JobStatus::Done)
+                                            && std::path::Path::new(&j.output_path).is_file()
+                                        {
                                             Some(j.output_path.clone())
                                         } else {
                                             None
@@ -361,7 +385,8 @@ fn run_tui(
                                             s.jobs.remove(i);
                                             s.save(&state_path)?;
                                             msg = Some("Удалено из очереди".into());
-                                            msg_until = Some(Instant::now() + Duration::from_secs(2));
+                                            msg_until =
+                                                Some(Instant::now() + Duration::from_secs(2));
                                         }
                                     }
                                 }
@@ -369,22 +394,41 @@ fn run_tui(
                             code if code == KeyCode::Up || key_matches(code, 'k') => {
                                 let len = state.lock().unwrap().jobs.len();
                                 let i = list_state.selected().unwrap_or(0).saturating_sub(1);
-                                list_state.select(if len > 0 { Some(i.min(len - 1)) } else { None });
+                                list_state.select(if len > 0 {
+                                    Some(i.min(len - 1))
+                                } else {
+                                    None
+                                });
                             }
                             code if code == KeyCode::Down || key_matches(code, 'j') => {
                                 let len = state.lock().unwrap().jobs.len();
                                 let i = list_state.selected().unwrap_or(0) + 1;
-                                list_state.select(if len > 0 { Some(i.min(len - 1)) } else { None });
+                                list_state.select(if len > 0 {
+                                    Some(i.min(len - 1))
+                                } else {
+                                    None
+                                });
                             }
                             KeyCode::PageUp => {
                                 let len = state.lock().unwrap().jobs.len();
-                                let i = list_state.selected().unwrap_or(0).saturating_sub(list_height);
-                                list_state.select(if len > 0 { Some(i.min(len - 1)) } else { None });
+                                let i = list_state
+                                    .selected()
+                                    .unwrap_or(0)
+                                    .saturating_sub(list_height);
+                                list_state.select(if len > 0 {
+                                    Some(i.min(len - 1))
+                                } else {
+                                    None
+                                });
                             }
                             KeyCode::PageDown => {
                                 let len = state.lock().unwrap().jobs.len();
                                 let i = list_state.selected().unwrap_or(0) + list_height;
-                                list_state.select(if len > 0 { Some(i.min(len - 1)) } else { None });
+                                list_state.select(if len > 0 {
+                                    Some(i.min(len - 1))
+                                } else {
+                                    None
+                                });
                             }
                             _ => {}
                         }

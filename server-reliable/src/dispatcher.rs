@@ -6,10 +6,10 @@
 
 use crate::asr::{AsrModel, ModelOutput};
 use crate::llm_corrector::LlmCorrector;
+use crate::overlap::merge_overlap;
 use crate::processor::{
     emit_status, wav_to_f32, ClientMessage, OutputSink, TranscribedEnd, WorkerState,
 };
-use crate::overlap::merge_overlap;
 use crate::transcript_postprocess::ensemble_merge_n;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -64,8 +64,7 @@ struct AsrTask {
 
 impl PartialEq for AsrTask {
     fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority
-            && self.submitted_at == other.submitted_at
+        self.priority == other.priority && self.submitted_at == other.submitted_at
     }
 }
 
@@ -231,10 +230,7 @@ impl AsrDispatcher {
                 st.queue_len[source_id as usize] =
                     st.queue_len[source_id as usize].saturating_sub(1);
             }
-            let device_name = models
-                .first()
-                .map(|m| m.name())
-                .unwrap_or("asr");
+            let device_name = models.first().map(|m| m.name()).unwrap_or("asr");
             emit_status(&handle.worker_state, &handle.output_sink, device_name);
 
             info!(
@@ -420,8 +416,8 @@ impl AsrDispatcher {
                 // --- LLM path: send raw text + prev_tail to LLM for smart merge/dedup/correction ---
                 let raw_text = out.text.trim().to_string();
 
-                let has_any_text = !raw_text.is_empty()
-                    || out.model_outputs.iter().any(|o| !o.text.is_empty());
+                let has_any_text =
+                    !raw_text.is_empty() || out.model_outputs.iter().any(|o| !o.text.is_empty());
                 if !has_any_text {
                     let _ = std::fs::remove_file(&out.wav_path);
                     let _ = std::fs::remove_file(&out.meta_path);
@@ -440,7 +436,10 @@ impl AsrDispatcher {
                     if ctx.is_empty() {
                         "(нет)".to_string()
                     } else {
-                        ctx.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" | ")
+                        ctx.iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" | ")
                     }
                 };
 
@@ -507,13 +506,21 @@ impl AsrDispatcher {
                 let text = if variants.is_some() {
                     String::new()
                 } else {
-                    out.model_outputs.first().map(|o| o.text.clone()).unwrap_or_default()
+                    out.model_outputs
+                        .first()
+                        .map(|o| o.text.clone())
+                        .unwrap_or_default()
                 };
-                let preview = out.model_outputs.iter()
+                let preview = out
+                    .model_outputs
+                    .iter()
                     .find(|o| !o.text.is_empty())
                     .map(|o| o.text.chars().take(80).collect::<String>())
                     .unwrap_or_default();
-                info!("transcribe src{}: {:.1}s -> {}", source_id, out.duration_sec, preview);
+                info!(
+                    "transcribe src{}: {:.1}s -> {}",
+                    source_id, out.duration_sec, preview
+                );
 
                 handle.output_sink.send(&ClientMessage::Transcript {
                     text,
@@ -562,7 +569,11 @@ impl AsrDispatcher {
                 next_seq: [0, 0],
             }),
         });
-        self.inner.lock().unwrap().sessions.insert(session_id, handle.clone());
+        self.inner
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(session_id, handle.clone());
         handle
     }
 
@@ -697,20 +708,17 @@ impl LlmDispatcher {
                 llm_inflight,
             } = task.task;
 
-            let corrected = match llm.correct(
-                &asr.model_outputs,
-                &asr.merged_text,
-                &context_snapshot,
-            ) {
-                Some(t) => t,
-                None => {
-                    tracing::debug!(
-                        "LLM correction failed for {}, using merged as fallback",
-                        asr.seg_id
-                    );
-                    asr.merged_text.clone()
-                }
-            };
+            let corrected =
+                match llm.correct(&asr.model_outputs, &asr.merged_text, &context_snapshot) {
+                    Some(t) => t,
+                    None => {
+                        tracing::debug!(
+                            "LLM correction failed for {}, using merged as fallback",
+                            asr.seg_id
+                        );
+                        asr.merged_text.clone()
+                    }
+                };
 
             let (emit, new_tail) = merge_overlap(&prev_tail, &corrected);
 
@@ -775,7 +783,8 @@ impl FileProcessor {
     }
 
     pub fn wait_until_empty(&self, timeout_sec: f64) {
-        self.dispatcher.wait_session_empty(&self.session_id, timeout_sec);
+        self.dispatcher
+            .wait_session_empty(&self.session_id, timeout_sec);
     }
 
     pub fn llm_queue_len(&self) -> usize {

@@ -60,8 +60,14 @@ pub fn key_matches(key: KeyCode, expected: char) -> bool {
 pub fn collect_input_devices() -> Vec<(cpal::Device, String)> {
     let host = cpal::default_host();
     let mut list = Vec::new();
-    for dev in host.input_devices().unwrap_or_else(|_| panic!("input_devices")) {
-        let name = dev.name().unwrap_or_default();
+    for dev in host
+        .input_devices()
+        .unwrap_or_else(|_| panic!("input_devices"))
+    {
+        let name = dev
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or_default();
         #[cfg(target_os = "macos")]
         if name.contains("Cpal loopback") || name.contains("cpal output recorder") {
             continue;
@@ -73,7 +79,10 @@ pub fn collect_input_devices() -> Vec<(cpal::Device, String)> {
 
 /// Строка для отображения устройства (имя + id + производитель — чтобы различать дубликаты).
 pub fn format_device_display(dev: &cpal::Device, name: &str, extra: &str) -> String {
-    let id_str = dev.id().map(|id| format!("{id}")).unwrap_or_else(|_| "?".into());
+    let id_str = dev
+        .id()
+        .map(|id| format!("{id}"))
+        .unwrap_or_else(|_| "?".into());
     let mut parts = vec![name.to_string()];
     if let Ok(desc) = dev.description() {
         if let Some(mfr) = desc.manufacturer() {
@@ -122,7 +131,11 @@ pub fn list_output_device_names() -> Vec<(usize, String)> {
         };
         let mut list: Vec<(usize, String)> = devices
             .enumerate()
-            .filter_map(|(i, dev)| dev.name().ok().map(|n| (i + 1, n)))
+            .filter_map(|(i, dev)| {
+                dev.description()
+                    .ok()
+                    .map(|d| (i + 1, d.name().to_string()))
+            })
             .collect();
         list.insert(0, (0, "default-output".to_string()));
         list
@@ -136,12 +149,16 @@ pub fn list_output_device_names() -> Vec<(usize, String)> {
         };
         devices
             .enumerate()
-            .filter_map(|(i, dev)| dev.name().ok().map(|n| (i, n)))
+            .filter_map(|(i, dev)| dev.description().ok().map(|d| (i, d.name().to_string())))
             .collect()
     }
 }
 
 pub fn resolve_device(query: &str) -> Result<cpal::Device> {
+    if query.eq_ignore_ascii_case("default") || query.eq_ignore_ascii_case("default-input") {
+        return default_device();
+    }
+
     let devices = collect_input_devices();
 
     if let Ok(idx) = query.parse::<usize>() {
@@ -224,14 +241,12 @@ pub fn audio_capture(
     } else {
         match device.default_output_config() {
             Ok(c) => c,
-            Err(cpal::DefaultStreamConfigError::StreamTypeNotSupported) => {
-                device
-                    .supported_output_configs()
-                    .context("supported_output_configs")?
-                    .next()
-                    .context("Нет supported output configs")?
-                    .with_max_sample_rate()
-            }
+            Err(cpal::DefaultStreamConfigError::StreamTypeNotSupported) => device
+                .supported_output_configs()
+                .context("supported_output_configs")?
+                .next()
+                .context("Нет supported output configs")?
+                .with_max_sample_rate(),
             Err(e) => return Err(e.into()),
         }
     };
@@ -272,11 +287,14 @@ pub fn audio_capture(
 
             while pcm_buf.len() >= CHUNK_FRAMES {
                 let chunk: Vec<i16> = pcm_buf.drain(..CHUNK_FRAMES).collect();
-                let rms: f64 =
-                    (chunk.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / chunk.len() as f64)
-                        .sqrt();
+                let rms: f64 = (chunk.iter().map(|&s| (s as f64).powi(2)).sum::<f64>()
+                    / chunk.len() as f64)
+                    .sqrt();
                 let level = (rms / 32768.0 * 12.0).min(1.0) as f32;
-                let _ = ui_tx2.send(UiEvent::AudioLevel { source: source_id, level });
+                let _ = ui_tx2.send(UiEvent::AudioLevel {
+                    source: source_id,
+                    level,
+                });
 
                 let mut bytes = Vec::with_capacity(1 + chunk.len() * 2);
                 bytes.push(source_id);
@@ -300,8 +318,8 @@ pub fn audio_capture(
 
 #[cfg(windows)]
 fn resolve_output_device(query: &str) -> Result<wasapi::Device> {
-    let enumerator = wasapi::DeviceEnumerator::new()
-        .map_err(|e| anyhow::anyhow!("DeviceEnumerator: {e:?}"))?;
+    let enumerator =
+        wasapi::DeviceEnumerator::new().map_err(|e| anyhow::anyhow!("DeviceEnumerator: {e:?}"))?;
 
     if query.eq_ignore_ascii_case("default-output") || query.eq_ignore_ascii_case("default") {
         return enumerator
@@ -365,7 +383,10 @@ fn resolve_output_device_macos(query: &str) -> Result<cpal::Device> {
 
     let needle = query.to_lowercase();
     for dev in host.output_devices()? {
-        let name = dev.name().unwrap_or_default();
+        let name = dev
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or_default();
         if name.to_lowercase().contains(&needle) {
             return Ok(dev);
         }
@@ -424,8 +445,14 @@ fn loopback_capture_wasapi(
         .get_iaudioclient()
         .map_err(|e| anyhow::anyhow!("get_iaudioclient: {e:?}"))?;
 
-    let desired_format =
-        wasapi::WaveFormat::new(16, 16, &wasapi::SampleType::Int, SAMPLE_RATE as usize, 1, None);
+    let desired_format = wasapi::WaveFormat::new(
+        16,
+        16,
+        &wasapi::SampleType::Int,
+        SAMPLE_RATE as usize,
+        1,
+        None,
+    );
 
     let (_, min_time) = audio_client
         .get_device_period()
@@ -469,7 +496,7 @@ fn loopback_capture_wasapi(
                 let b = sample_queue.pop_front().unwrap();
                 tagged.push(b);
                 if i % 2 == 0 && i + 1 < chunk_bytes {
-                    let lo = b as u8;
+                    let lo = b;
                     let hi = *sample_queue.front().unwrap_or(&0);
                     let sample = i16::from_le_bytes([lo, hi]);
                     rms_sum += (sample as f64).powi(2);

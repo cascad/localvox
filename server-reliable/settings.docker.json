@@ -19,5 +19,6 @@
   "models": [
     { "type": "whisper", "model_path": "/models/whisper/ggml-large-v3-turbo.bin", "use_gpu": true },
     { "type": "gigaam", "model_path": "/models/gigaam", "use_gpu": true }
-  ]
+  ],
+  "_parakeet_example": "Раскомментировать volume в docker-compose.yml и добавить в models: { \"type\": \"parakeet\", \"model_path\": \"/models/parakeet\", \"use_gpu\": true }"
 }

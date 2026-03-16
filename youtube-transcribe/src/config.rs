@@ -184,7 +184,11 @@ pub fn resolve_js_runtime(settings: &Settings) -> Option<String> {
         };
         if p.is_file() {
             let name = runtime.split(':').next().unwrap_or("node").trim();
-            return Some(format!("{}:{}", if name.is_empty() { "node" } else { name }, p.to_string_lossy()));
+            return Some(format!(
+                "{}:{}",
+                if name.is_empty() { "node" } else { name },
+                p.to_string_lossy()
+            ));
         }
     }
 

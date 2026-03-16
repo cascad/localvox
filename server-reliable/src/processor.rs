@@ -85,7 +85,15 @@ impl OutputSink {
     /// For Transcript/Done: append to transcript.jsonl, then forward to client.
     pub fn send(&self, msg: &ClientMessage) {
         match msg {
-            ClientMessage::Transcript { text, source, start_sec, end_sec, seg_id, variants, .. } => {
+            ClientMessage::Transcript {
+                text,
+                source,
+                start_sec,
+                end_sec,
+                seg_id,
+                variants,
+                ..
+            } => {
                 let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
                 let mut line = serde_json::json!({
                     "seq": seq,
@@ -197,19 +205,21 @@ impl OutputSink {
                         v.get("start_sec").and_then(|x| x.as_f64()),
                         v.get("end_sec").and_then(|x| x.as_f64()),
                     ) {
-                        let variants = v.get("variants")
-                            .and_then(|a| a.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|o| {
-                                        Some(TranscriptVariant {
-                                            model: o.get("model")?.as_str()?.to_string(),
-                                            text: o.get("text")?.as_str()?.to_string(),
-                                        })
+                        let variants = v.get("variants").and_then(|a| a.as_array()).map(|arr| {
+                            arr.iter()
+                                .filter_map(|o| {
+                                    Some(TranscriptVariant {
+                                        model: o.get("model")?.as_str()?.to_string(),
+                                        text: o.get("text")?.as_str()?.to_string(),
                                     })
-                                    .collect::<Vec<_>>()
-                            });
-                        let seg_id = v.get("seg_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        let seg_id = v
+                            .get("seg_id")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         let _ = tx.send(ClientMessage::Transcript {
                             text: text.to_string(),
                             source: source as u8,
@@ -230,7 +240,9 @@ impl OutputSink {
         if skip_to_seq > 0 {
             tracing::info!(
                 "Replay: skipped {} (seq ≤ {}), sent {} new entries",
-                skipped, skip_to_seq, replayed
+                skipped,
+                skip_to_seq,
+                replayed
             );
         }
         if register {
@@ -330,4 +342,3 @@ pub fn emit_status(state_shared: &Arc<Mutex<WorkerState>>, output_sink: &OutputS
     });
     output_sink.send_status(status);
 }
-

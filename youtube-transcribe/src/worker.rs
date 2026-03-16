@@ -30,19 +30,30 @@ const CHUNK_BYTES: usize = 8192;
 const POLL_MS: u64 = 500;
 
 async fn read_session_state(
-    read: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>>,
+    read: &mut futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
 ) -> Result<String, anyhow::Error> {
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(s)) => {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
                     if v.get("type").and_then(|x| x.as_str()) == Some("session") {
-                        return Ok(v.get("state").and_then(|x| x.as_str()).unwrap_or("new").to_string());
+                        return Ok(v
+                            .get("state")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("new")
+                            .to_string());
                     }
                 }
             }
             Ok(Message::Close(_)) => break,
-            Ok(Message::Binary(_)) | Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
+            Ok(Message::Binary(_))
+            | Ok(Message::Ping(_))
+            | Ok(Message::Pong(_))
+            | Ok(Message::Frame(_)) => {}
             Err(_) => break,
         }
     }
@@ -76,7 +87,11 @@ pub async fn run_worker(
             s.set_in_progress(idx);
             s.save(&state_path).ok();
             let j = &s.jobs[idx];
-            let sid = if j.session_id.is_empty() { j.id.clone() } else { j.session_id.clone() };
+            let sid = if j.session_id.is_empty() {
+                j.id.clone()
+            } else {
+                j.session_id.clone()
+            };
             (j.url.clone(), PathBuf::from(&j.output_path), sid)
         };
 
@@ -135,9 +150,10 @@ async fn process_one(
             serde_json::json!({
                 "type": "config",
                 "source_count": 1,
-                "session_id": session_id,
+                "client_id": session_id,
                 "mode": "batch"
-            }).to_string(),
+            })
+            .to_string(),
         ))
         .await?;
 
@@ -197,15 +213,21 @@ async fn process_one(
                     match v.get("type").and_then(|x| x.as_str()) {
                         Some("transcript") => {
                             if let Some(text) = v.get("text").and_then(|x| x.as_str()) {
-                                let start_sec = v.get("start_sec").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                                let start_sec =
+                                    v.get("start_sec").and_then(|x| x.as_f64()).unwrap_or(0.0);
                                 transcripts.push((start_sec, text.to_string()));
                             }
                         }
                         Some("done") => done = true,
                         Some("status") => {
                             let status = ServerStatus {
-                                task_queue_size: v.get("task_queue_size").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
-                                llm_queue: v.get("llm_queue").and_then(|x| x.as_u64()).unwrap_or(0) as usize,
+                                task_queue_size: v
+                                    .get("task_queue_size")
+                                    .and_then(|x| x.as_u64())
+                                    .unwrap_or(0)
+                                    as usize,
+                                llm_queue: v.get("llm_queue").and_then(|x| x.as_u64()).unwrap_or(0)
+                                    as usize,
                                 lag_sec: v.get("lag_sec").and_then(|x| x.as_f64()).unwrap_or(0.0),
                             };
                             if let Ok(mut s) = state.lock() {
@@ -243,10 +265,21 @@ async fn process_one(
     Ok(())
 }
 
-fn download_audio(yt_dlp: &str, url: &str, ffmpeg_location: Option<&str>, js_runtime: Option<&str>) -> Result<PathBuf> {
+fn download_audio(
+    yt_dlp: &str,
+    url: &str,
+    ffmpeg_location: Option<&str>,
+    js_runtime: Option<&str>,
+) -> Result<PathBuf> {
     let base = std::env::temp_dir().join(format!("yt_transcribe_{}", std::process::id()));
     let out_template = base.with_extension("%(ext)s");
-    let mut args = vec!["-x", "-f", "bestaudio", "-o", out_template.to_str().unwrap()];
+    let mut args = vec![
+        "-x",
+        "-f",
+        "bestaudio",
+        "-o",
+        out_template.to_str().unwrap(),
+    ];
     if let Some(loc) = ffmpeg_location {
         args.push("--ffmpeg-location");
         args.push(loc);
@@ -277,10 +310,14 @@ fn download_audio(yt_dlp: &str, url: &str, ffmpeg_location: Option<&str>, js_run
 fn convert_to_pcm(ffmpeg: &str, input: &PathBuf) -> Result<Vec<u8>> {
     let mut output = Command::new(ffmpeg)
         .args([
-            "-i", input.to_str().unwrap(),
-            "-ar", "16000",
-            "-ac", "1",
-            "-f", "s16le",
+            "-i",
+            input.to_str().unwrap(),
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "s16le",
             "-",
         ])
         .stdout(std::process::Stdio::piped())

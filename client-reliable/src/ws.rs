@@ -12,6 +12,7 @@ use url::Url;
 
 use crate::types::{ServerMessage, UiEvent, WsOutgoing};
 
+#[allow(clippy::too_many_arguments)]
 pub fn ws_io_thread(
     server_url: String,
     out_rx: mpsc::Receiver<WsOutgoing>,
@@ -39,7 +40,11 @@ pub fn ws_io_thread(
         let host = parsed_url
             .host_str()
             .expect("URL сервера должен содержать host");
-        let host = if host == "localhost" { "127.0.0.1" } else { host };
+        let host = if host == "localhost" {
+            "127.0.0.1"
+        } else {
+            host
+        };
         let port = parsed_url
             .port()
             .expect("URL сервера должен содержать порт");
@@ -116,7 +121,9 @@ pub fn ws_io_thread(
 
         let _ = ui_tx.send(UiEvent::Connected);
 
-        let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
+        let _ = ws
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(20)));
 
         let mut write_errors = 0u32;
         let mut disconnected = false;
@@ -134,7 +141,11 @@ pub fn ws_io_thread(
                                 let _ = ui_tx.send(UiEvent::Server(srv_msg));
                                 disconnected = true;
                             }
-                        } else if let ServerMessage::Session { ref state, ref session_id } = srv_msg {
+                        } else if let ServerMessage::Session {
+                            ref state,
+                            ref session_id,
+                        } = srv_msg
+                        {
                             let sid_str = session_id.as_deref().unwrap_or("?");
                             if state == "new" {
                                 last_seq.store(0, Ordering::Relaxed);
@@ -159,9 +170,8 @@ pub fn ws_io_thread(
                     });
                 }
                 Err(tungstenite::Error::Io(ref e))
-                    if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-                {
-                }
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut => {}
                 Err(e) => {
                     disconnected = true;
                     let _ = ui_tx.send(UiEvent::Disconnected {
@@ -173,8 +183,8 @@ pub fn ws_io_thread(
 
             while let Ok(msg) = out_rx.try_recv() {
                 let result = match msg {
-                    WsOutgoing::Binary(data) => ws.send(Message::Binary(data.into())),
-                    WsOutgoing::Text(text) => ws.send(Message::Text(text.into())),
+                    WsOutgoing::Binary(data) => ws.send(Message::Binary(data)),
+                    WsOutgoing::Text(text) => ws.send(Message::Text(text)),
                 };
                 match result {
                     Ok(_) => write_errors = 0,

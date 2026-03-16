@@ -28,12 +28,7 @@ pub trait AsrModel: Send + Sync {
     fn name(&self) -> &str;
     /// Returns "CPU" or "GPU" depending on backend.
     fn backend(&self) -> &str;
-    fn transcribe(
-        &self,
-        wav_path: &Path,
-        samples: &[f32],
-        language: &str,
-    ) -> Result<String>;
+    fn transcribe(&self, wav_path: &Path, samples: &[f32], language: &str) -> Result<String>;
     fn filter_hallucinations(&self, text: &str) -> String;
 }
 
@@ -54,11 +49,17 @@ pub fn load_models(settings: &Settings) -> Result<Vec<Arc<dyn AsrModel>>> {
             }
             "gigaam" => {
                 let use_gpu = entry.use_gpu.unwrap_or(settings.use_gpu);
-                Arc::new(GigaAmAdapter::new(std::path::Path::new(&entry.model_path), use_gpu)?)
+                Arc::new(GigaAmAdapter::new(
+                    std::path::Path::new(&entry.model_path),
+                    use_gpu,
+                )?)
             }
             "parakeet" => {
                 let use_gpu = entry.use_gpu.unwrap_or(settings.use_gpu);
-                Arc::new(parakeet::ParakeetAdapter::new(std::path::Path::new(&entry.model_path), use_gpu)?)
+                Arc::new(parakeet::ParakeetAdapter::new(
+                    std::path::Path::new(&entry.model_path),
+                    use_gpu,
+                )?)
             }
             other => {
                 tracing::warn!("Unknown ASR model type '{}', skipping", other);

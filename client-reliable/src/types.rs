@@ -119,8 +119,12 @@ pub enum ServerMessage {
         seq: u64,
     },
     Status(StatusData),
-    Debug { text: String },
-    Error { text: String },
+    Debug {
+        text: String,
+    },
+    Error {
+        text: String,
+    },
 }
 
 /// Server status payload.

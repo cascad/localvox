@@ -12,6 +12,12 @@ models/
 # Audio buffer
 audio/
 
+# Runtime output
+transcript.txt
+exports/
+transcripts/
+queue.json
+
 # Python
 venv/
 tools/venv/

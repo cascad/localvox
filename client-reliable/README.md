@@ -1,16 +1,27 @@
 # live-transcribe-client-reliable
 
-Копия клиента для использования с **reliable-transcribe** сервером. Отображает отставание распознавания и размер папки с аудио на сервере.
+TUI-клиент для LocalVox сервера. Захватывает микрофон и loopback системного звука, отправляет на сервер, отображает транскрипцию в терминале.
 
 ## Запуск
 
 ```bash
-cargo run -p live-transcribe-client-reliable -- --device 0 --loopback Razer --output transcript.txt
+cargo run -p live-transcribe-client-reliable -- --loopback default-output --output transcript.txt
 ```
 
-Параметры те же, что у `live-transcribe-client`. В блоке статуса добавлена строка:
+При первом запуске без `client-config.json` автоматически создаётся конфиг с дефолтными настройками.
+
+## Статус
+
+В блоке статуса:
 
 - **Отставание** — на сколько секунд распознавание отстаёт от записи (общее и по mic/sys).
 - **Папка** — размер папки с аудио на сервере (MB).
 
-Сервер должен быть reliable-transcribe (`reliable-transcribe/server.py`). Если сервер не присылает поля `lag_sec`, `audio_dir_size_mb`, в интерфейсе будет «—».
+## Клавиши
+
+- `r` — вкл/выкл запись
+- `x` — завершить сессию
+- `e` — экспорт + суммаризация
+- `F2` — настройки (микрофон/loopback)
+- `q`/Esc — выход
+- ↑↓ / jk — прокрутка, Tab — переключение фокуса, Home/End

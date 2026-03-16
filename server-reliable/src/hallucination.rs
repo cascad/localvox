@@ -85,10 +85,7 @@ const WHISPER_STRIP: &[(&str, bool)] = &[
 ];
 
 /// GigaAM: отбрасываем весь сегмент (редактор субтитров, корректор и т.п.).
-const GIGAAM_DROP: &[&str] = &[
-    "редактор субтитров",
-    "корректор а.егорова",
-];
+const GIGAAM_DROP: &[&str] = &["редактор субтитров", "корректор а.егорова"];
 
 /// GigaAM: вырезаем встроенные фразы (редактор субтитров, корректор и т.п.).
 const GIGAAM_STRIP: &[(&str, bool)] = &[
@@ -102,12 +99,7 @@ const GIGAAM_STRIP: &[(&str, bool)] = &[
 /// Parakeet: отбрасываем весь сегмент при типичных галлюцинациях (короткие сегменты).
 /// Parakeet TDT 0.6B часто выдаёт случайные английские слова на тишине/шуме.
 /// yeah — самая частая галлюцинация (sherpa-onnx #3267), pinch — из практики.
-const PARAKEET_DROP: &[&str] = &[
-    "yeah",
-    "yeah.",
-    "pinch",
-    "pinch.",
-];
+const PARAKEET_DROP: &[&str] = &["yeah", "yeah.", "pinch", "pinch."];
 
 /// Parakeet: вырезаем встроенные фразы.
 const PARAKEET_STRIP: &[(&str, bool)] = &[];
@@ -203,7 +195,9 @@ mod tests {
 
     #[test]
     fn test_whisper_strip_embedded() {
-        let t = filter_whisper("Но они называют это. Субтитры создал DimaTorzhok с высоким уровнем. Нет.");
+        let t = filter_whisper(
+            "Но они называют это. Субтитры создал DimaTorzhok с высоким уровнем. Нет.",
+        );
         assert!(!t.to_lowercase().contains("субтитр"));
         assert!(t.contains("Но они"));
         assert!(t.contains("Нет"));

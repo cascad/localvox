@@ -5,17 +5,21 @@ mod transcript;
 mod tui;
 mod types;
 mod ws;
-pub use audio::{audio_capture, collect_input_devices, default_device, format_device_display, key_matches, list_output_device_names, loopback_capture, physical_key, resample, resolve_device, to_mono, SAMPLE_RATE};
+pub use audio::{
+    audio_capture, collect_input_devices, default_device, format_device_display, key_matches,
+    list_output_device_names, loopback_capture, physical_key, resample, resolve_device, to_mono,
+    SAMPLE_RATE,
+};
 pub use config::{get_config_save_path, load_config, ClientConfig};
-pub use summarize::spawn_summarize_ollama;
-pub use transcript::{export_trimmed_transcript, TranscriptStore};
-pub use types::*;
-pub use tui::run_tui;
-pub use ws::ws_io_thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+pub use summarize::spawn_summarize_ollama;
+pub use transcript::{export_trimmed_transcript, TranscriptStore};
+pub use tui::run_tui;
+pub use types::*;
+pub use ws::ws_io_thread;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -25,7 +29,10 @@ use url::Url;
 // ── CLI ──────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "live-transcribe-client-reliable", about = "Клиент reliable-transcribe с отображением отставания")]
+#[command(
+    name = "live-transcribe-client-reliable",
+    about = "Клиент reliable-transcribe с отображением отставания"
+)]
 struct Cli {
     /// WebSocket-сервер
     #[arg(short, long)]
@@ -72,7 +79,11 @@ fn list_devices() {
         };
         let is_default = host
             .default_input_device()
-            .map(|d| d.name().unwrap_or_default() == name)
+            .map(|d| {
+                d.description()
+                    .map(|desc| desc.name() == name)
+                    .unwrap_or(false)
+            })
             .unwrap_or(false);
         let extra = if is_default {
             format!("{info} (по умолчанию)")
@@ -88,7 +99,10 @@ fn list_devices() {
     #[cfg(any(windows, target_os = "macos"))]
     eprintln!("  [default-output] системный звук (по умолчанию)");
     for (i, dev) in host.output_devices().unwrap().enumerate() {
-        let name = dev.name().unwrap_or_else(|_| "?".into());
+        let name = dev
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or_else(|_| "?".into());
         let cfg = dev.default_output_config();
         let info = match cfg {
             Ok(c) => format!("rate {}, ch {}", c.sample_rate(), c.channels()),
@@ -96,22 +110,31 @@ fn list_devices() {
         };
         let is_default = host
             .default_output_device()
-            .map(|d| d.name().unwrap_or_default() == name)
+            .map(|d| {
+                d.description()
+                    .map(|desc| desc.name() == name)
+                    .unwrap_or(false)
+            })
             .unwrap_or(false);
-        let mark = if is_default { " (по умолчанию)" } else { "" };
+        let mark = if is_default {
+            " (по умолчанию)"
+        } else {
+            ""
+        };
         eprintln!("  [{i}] {name} ({info}){mark}");
     }
 
     eprintln!();
     #[cfg(any(windows, target_os = "macos"))]
-    eprintln!("Для захвата системного звука: --loopback default-output (или имя/индекс устройства)");
+    eprintln!(
+        "Для захвата системного звука: --loopback default-output (или имя/индекс устройства)"
+    );
     #[cfg(all(not(windows), not(target_os = "macos")))]
     eprintln!("Для захвата системного звука: --loopback <имя или индекс input-устройства>");
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
 
     if cli.list_devices {
         list_devices();
@@ -122,8 +145,7 @@ fn main() -> Result<()> {
         eprintln!("Конфиг: {path}");
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("Не удалось прочитать конфиг {path}"))?;
-        serde_json::from_str(&text)
-            .with_context(|| format!("Ошибка парсинга конфига {path}"))?
+        serde_json::from_str(&text).with_context(|| format!("Ошибка парсинга конфига {path}"))?
     } else {
         load_config()
     };
@@ -133,8 +155,24 @@ fn main() -> Result<()> {
         let (ws_out_tx, _ws_out_rx) = mpsc::channel();
         let running = std::sync::Arc::new(AtomicBool::new(true));
         let pending_end_session = std::sync::Arc::new(AtomicBool::new(false));
-        let output = cli.output.as_ref().or(cfg.output.as_ref()).cloned().unwrap_or_else(|| "transcript.txt".into());
-        let _ = run_tui(ui_rx, ui_tx, ws_out_tx, running, pending_end_session, &output, false, &cfg, false, true)?;
+        let output = cli
+            .output
+            .as_ref()
+            .or(cfg.output.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "transcript.txt".into());
+        let _ = run_tui(
+            ui_rx,
+            ui_tx,
+            ws_out_tx,
+            running,
+            pending_end_session,
+            &output,
+            false,
+            &cfg,
+            false,
+            true,
+        )?;
         return Ok(());
     }
 
@@ -142,25 +180,48 @@ fn main() -> Result<()> {
     let mut recording = true;
     loop {
         let cfg_for_tui = cfg.clone();
-        let server = cli.server.as_ref().or(cfg.server.as_ref()).cloned().unwrap_or_else(|| "ws://localhost:9745".into());
+        let server = cli
+            .server
+            .as_ref()
+            .or(cfg.server.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "ws://localhost:9745".into());
         let dev_query = cli.device.as_ref().or(cfg.device.as_ref()).cloned();
-        let loopback_query = cli.loopback.as_ref().or(cfg.loopback.as_ref()).cloned().or_else(|| {
-            cfg.device2.as_ref().or(cli.device2.as_ref()).and_then(|q| {
-                q.strip_prefix("out:").map(|s| s.to_string())
-            })
-        });
+        let loopback_query = cli
+            .loopback
+            .as_ref()
+            .or(cfg.loopback.as_ref())
+            .cloned()
+            .or_else(|| {
+                cfg.device2
+                    .as_ref()
+                    .or(cli.device2.as_ref())
+                    .and_then(|q| q.strip_prefix("out:").map(|s| s.to_string()))
+            });
         let dev2_query = if loopback_query.is_none() {
-            cli.device2.as_ref().or(cfg.device2.as_ref()).cloned().filter(|q| !q.starts_with("out:"))
+            cli.device2
+                .as_ref()
+                .or(cfg.device2.as_ref())
+                .cloned()
+                .filter(|q| !q.starts_with("out:"))
         } else {
             None
         };
-        let output = cli.output.as_ref().or(cfg.output.as_ref()).cloned().unwrap_or_else(|| "transcript.txt".into());
+        let output = cli
+            .output
+            .as_ref()
+            .or(cfg.output.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "transcript.txt".into());
 
         let device = match &dev_query {
             Some(q) => resolve_device(q)?,
             None => default_device()?,
         };
-        let dev_name = device.name().unwrap_or_else(|_| "?".into());
+        let dev_name = device
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or_else(|_| "?".into());
         eprintln!("Микрофон: {dev_name}");
 
         if let Some(ref q) = loopback_query {
@@ -170,7 +231,12 @@ fn main() -> Result<()> {
         let input_dev2 = match &dev2_query {
             Some(q) => {
                 let d = resolve_device(q)?;
-                eprintln!("Микрофон 2: {}", d.name().unwrap_or_else(|_| "?".into()));
+                eprintln!(
+                    "Микрофон 2: {}",
+                    d.description()
+                        .map(|desc| desc.name().to_string())
+                        .unwrap_or_else(|_| "?".into())
+                );
                 Some(d)
             }
             None => None,
@@ -198,7 +264,16 @@ fn main() -> Result<()> {
         let pending_end_session = std::sync::Arc::new(AtomicBool::new(false));
         let pending_end_session_ws = pending_end_session.clone();
         let ws_thread = thread::spawn(move || {
-            ws_io_thread(ws_url, ws_out_rx, ui_tx_ws, running_ws, src_count, client_id, pending_end_session_ws, recording);
+            ws_io_thread(
+                ws_url,
+                ws_out_rx,
+                ui_tx_ws,
+                running_ws,
+                src_count,
+                client_id,
+                pending_end_session_ws,
+                recording,
+            );
         });
 
         let ws_out_audio = ws_out_tx.clone();
@@ -232,7 +307,18 @@ fn main() -> Result<()> {
             None
         };
 
-        let (need_restart, new_recording) = run_tui(ui_rx, ui_tx, ws_out_tx, running.clone(), pending_end_session.clone(), &output, has_source2, &cfg_for_tui, recording, false)?;
+        let (need_restart, new_recording) = run_tui(
+            ui_rx,
+            ui_tx,
+            ws_out_tx,
+            running.clone(),
+            pending_end_session.clone(),
+            &output,
+            has_source2,
+            &cfg_for_tui,
+            recording,
+            false,
+        )?;
         recording = new_recording;
 
         running.store(false, Ordering::Relaxed);
@@ -359,7 +445,12 @@ mod tests {
         let json = r#"{"type":"transcript","text":"привет","source":0}"#;
         let msg: ServerMessage = serde_json::from_str(json).unwrap();
         match &msg {
-            ServerMessage::Transcript { text, source, variants, .. } => {
+            ServerMessage::Transcript {
+                text,
+                source,
+                variants,
+                ..
+            } => {
                 assert_eq!(text, "привет");
                 assert_eq!(*source, Some(0));
                 assert!(variants.is_none());
@@ -413,7 +504,8 @@ mod tests {
             &export,
             &Some("src1_000001".into()),
             &Some("src1_000002".into()),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(n, 2);
         let out = std::fs::read_to_string(&export).unwrap();
         assert!(out.contains("hello"));

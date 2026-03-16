@@ -2,7 +2,10 @@
 
 /// Word-level edit distance (Levenshtein) alignment between two word sequences.
 /// Returns aligned pairs: (Option<word_a>, Option<word_b>) — None means gap.
-fn align_words<'a>(words_a: &[&'a str], words_b: &[&'a str]) -> Vec<(Option<&'a str>, Option<&'a str>)> {
+fn align_words<'a>(
+    words_a: &[&'a str],
+    words_b: &[&'a str],
+) -> Vec<(Option<&'a str>, Option<&'a str>)> {
     let n = words_a.len();
     let m = words_b.len();
 
@@ -78,7 +81,11 @@ fn pick_best_word<'a>(a: Option<&'a str>, b: Option<&'a str>) -> &'a str {
 /// Объединяет результаты N моделей через последовательный pairwise word-level alignment.
 /// N=0: пусто, N=1: как есть, N=2+: merge первых двух, затем результат с третьей и т.д.
 pub fn ensemble_merge_n(texts: &[&str]) -> String {
-    let texts: Vec<&str> = texts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let texts: Vec<&str> = texts
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     match texts.len() {
         0 => String::new(),
         1 => texts[0].to_string(),
@@ -189,7 +196,10 @@ mod tests {
 
     #[test]
     fn test_ensemble_merge_n_two() {
-        assert_eq!(ensemble_merge_n(&["hello", "world"]), ensemble_merge("hello", "world"));
+        assert_eq!(
+            ensemble_merge_n(&["hello", "world"]),
+            ensemble_merge("hello", "world")
+        );
     }
 
     #[test]

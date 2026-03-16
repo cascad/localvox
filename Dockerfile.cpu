@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+# CPU-only образ сервера (для машин без GPU)
+# Использование: docker build -f Dockerfile.cpu -t localvox:cpu .
+
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_INIT_SKIP_PATH_CHECK=yes
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    libclang-dev \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /build
+
+COPY Cargo.toml.docker ./Cargo.toml
+COPY Cargo.lock ./
+COPY server-reliable ./server-reliable/
+
+# CPU-only: без default features (cuda)
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build -p live-transcribe-server-reliable --release --no-default-features && \
+    mkdir -p /build/out /build/sherpa-libs && \
+    cp /build/target/release/live-transcribe-server-reliable /build/out/ && \
+    (cp -n /build/target/release/*.so /build/sherpa-libs/ 2>/dev/null || true) && \
+    (cp -n /build/target/release/deps/*.so /build/sherpa-libs/ 2>/dev/null || true)
+
+# Runtime
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /build/out/live-transcribe-server-reliable /app/
+COPY --from=builder /build/sherpa-libs/ /app/
+COPY server-reliable/settings.docker.cpu.json /app/settings.json
+
+RUN mkdir -p /app/audio
+
+ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
+
+EXPOSE 9745
+
+CMD ["./live-transcribe-server-reliable", "--host", "0.0.0.0", "--port", "9745"]

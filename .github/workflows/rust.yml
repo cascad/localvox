@@ -30,8 +30,15 @@ jobs:
       - name: Check format
         run: cargo fmt --all -- --check
 
-      # Client only — server requires CUDA/libclang for build
       - name: Test client
         run: cargo test -p live-transcribe-client-reliable
-      - name: Clippy
+
+      # Server: CPU-only build (--no-default-features) для CI без GPU
+      - name: Install server build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libclang-dev
+      - name: Test server (CPU)
+        run: cargo test -p live-transcribe-server-reliable --no-default-features
+      - name: Clippy client
         run: cargo clippy -p live-transcribe-client-reliable -- -D warnings
+      - name: Clippy server (CPU)
+        run: cargo clippy -p live-transcribe-server-reliable --no-default-features -- -D warnings
