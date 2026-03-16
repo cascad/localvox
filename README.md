@@ -12,13 +12,13 @@ chmod +x tools/setup.sh
 ./tools/setup.sh
 ```
 
-Скрипт скачает модели, установит nvidia-container-toolkit и запустит сервер через Docker Compose. После — сервер работает на `ws://localhost:9745`.
+Скрипт скачает модели, установит nvidia-container-toolkit и запустит сервер через Docker Compose. Сервер слушает на всех интерфейсах (`0.0.0.0:9745`), порт проброшен наружу: с той же машины — `ws://localhost:9745`, с другой — `ws://<IP_хоста>:9745`.
 
 На Windows: WSL или Git Bash (`bash tools/setup.sh`).
 
 ### Клиент
 
-Скачать бинарник из [Releases](https://github.com/cascad/localvox/releases) и запустить. При первом запуске автоматически создаётся `client-config.json` с дефолтами — если сервер на той же машине, работает из коробки. Если на другой — поменять `server` в конфиге.
+Скачать бинарник из [Releases](https://github.com/cascad/localvox/releases) и один раз запустить — создастся `client-config.json` с дефолтами. Если подключаетесь к серверу на другой машине, в конфиге укажите IP в двух местах: `server` (WebSocket транскрипции) и `summarize_url` (Ollama для суммаризации при экспорте), например `ws://192.168.1.10:9745` и `http://192.168.1.10:11434`.
 
 Или из исходников:
 
@@ -46,6 +46,8 @@ cargo run -p live-transcribe-client-reliable
 **Требования:** Docker, NVIDIA GPU + драйверы. На Ubuntu/Debian скрипт сам поставит toolkit.
 
 Управление: `docker compose down` / `docker compose up -d`.
+
+**Подключение извне:** порт 9745 проброшен на хост. С другой машины — `ws://<IP_хоста>:9745`. Если не коннектится, откройте TCP 9745 в файрволе хоста (например Linux: `sudo ufw allow 9745/tcp`, Windows: правило для входящих в брандмауэре).
 
 ### Развёртывание сервера (Cargo)
 
@@ -81,8 +83,8 @@ cargo run -p live-transcribe-server-reliable --release -- --host 0.0.0.0 --port 
 
 ### Клиент (TUI)
 
-- Микрофон + loopback системного звука (Windows: WASAPI, macOS: BlackHole и т.п.)
-- Автогенерация `client-config.json` при первом запуске (`device: "default"`, `loopback: "default-output"`, `summarize_enabled: true`)
+- Микрофон + loopback системного звука (Windows: WASAPI, macOS: устройство вывода по имени или `default-output` через cpal)
+- Конфиг: запустите клиент один раз — создастся `client-config.json` (`device: "default"`, `loopback: "default-output"`, `summarize_enabled: true`). Сервер на другой машине: в конфиге задайте `server` (WebSocket) и `summarize_url` (Ollama).
 - **Клавиши:** `r` — запись, `x` — завершить сессию, `e` — экспорт + суммаризация, `F2` — настройки, `q`/Esc — выход
 - Прокрутка: ↑↓ / jk / Tab, Home/End
 
