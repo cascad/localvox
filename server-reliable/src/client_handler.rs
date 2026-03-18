@@ -170,33 +170,31 @@ fn handle_text_msg(
             if let Some(sc) = v.get("source_count").and_then(|x| x.as_u64()) {
                 writer.set_source_count((sc as u8).clamp(1, 2));
             }
-        } else if t == "end_of_stream" || t == "end_session" {
-            if !*writer_flushed {
-                *writer_flushed = true;
-                session.end_of_stream.store(true, Ordering::Relaxed);
-                for (path, src) in writer.close()? {
-                    info!(
-                        "Segment ready src{}: {} -> queue (final)",
-                        src,
-                        path.display()
-                    );
-                    processor.enqueue(path, src);
+        } else if (t == "end_of_stream" || t == "end_session") && !*writer_flushed {
+            *writer_flushed = true;
+            session.end_of_stream.store(true, Ordering::Relaxed);
+            for (path, src) in writer.close()? {
+                info!(
+                    "Segment ready src{}: {} -> queue (final)",
+                    src,
+                    path.display()
+                );
+                processor.enqueue(path, src);
+            }
+            processor.wait_until_empty(3600.0);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            output_sink.send(&processor::ClientMessage::Done);
+            session.processing_complete.store(true, Ordering::Relaxed);
+            if t == "end_session" {
+                session::mark_session_done(&session.dir);
+                if let Some(ref cid) = session.client_id {
+                    registry.remove_client_session(cid);
                 }
-                processor.wait_until_empty(3600.0);
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                output_sink.send(&processor::ClientMessage::Done);
-                session.processing_complete.store(true, Ordering::Relaxed);
-                if t == "end_session" {
-                    session::mark_session_done(&session.dir);
-                    if let Some(ref cid) = session.client_id {
-                        registry.remove_client_session(cid);
-                    }
-                    registry.remove(&session.id);
-                    info!(
-                        "Session ended by client, marked done and removed: {}",
-                        session.id
-                    );
-                }
+                registry.remove(&session.id);
+                info!(
+                    "Session ended by client, marked done and removed: {}",
+                    session.id
+                );
             }
         }
     }

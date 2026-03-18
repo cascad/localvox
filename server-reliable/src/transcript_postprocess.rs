@@ -11,11 +11,11 @@ fn align_words<'a>(
 
     // dp[i][j] = edit distance for words_a[..i] vs words_b[..j]
     let mut dp = vec![vec![0usize; m + 1]; n + 1];
-    for i in 0..=n {
-        dp[i][0] = i;
+    for (i, row) in dp.iter_mut().enumerate().take(n + 1) {
+        row[0] = i;
     }
-    for j in 0..=m {
-        dp[0][j] = j;
+    for (j, val) in dp[0].iter_mut().enumerate().take(m + 1) {
+        *val = j;
     }
     for i in 1..=n {
         for j in 1..=m {

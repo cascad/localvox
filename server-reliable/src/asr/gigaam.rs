@@ -110,7 +110,7 @@ impl GigaAmAdapter {
             let text = if raw.text.is_null() {
                 String::new()
             } else {
-                std::ffi::CStr::from_ptr(raw.text as *const i8)
+                std::ffi::CStr::from_ptr(raw.text)
                     .to_string_lossy()
                     .into_owned()
             };

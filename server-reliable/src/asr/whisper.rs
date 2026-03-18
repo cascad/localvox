@@ -19,8 +19,10 @@ pub struct WhisperAdapter {
 
 impl WhisperAdapter {
     pub fn new(model_path: &str, use_gpu: bool, no_speech_thold: f32) -> Result<Self> {
-        let mut params = WhisperContextParameters::default();
-        params.use_gpu = use_gpu;
+        let params = WhisperContextParameters {
+            use_gpu,
+            ..Default::default()
+        };
         let backend = if use_gpu { "GPU (CUDA)" } else { "CPU" };
         tracing::info!("Whisper: provider {}", backend);
         let context = WhisperContext::new_with_params(model_path, params)

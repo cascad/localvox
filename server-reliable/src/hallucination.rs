@@ -128,7 +128,7 @@ fn apply_filter(text: &str, drop_patterns: &[&str], strip_phrases: &[(&str, bool
     let dominated_by_brackets = {
         let total = t.chars().count();
         let bracket_chars: usize = t
-            .split(|c| c == '[' || c == '*' || c == '(')
+            .split(['[', '*', '('])
             .skip(1)
             .map(|s| s.chars().count() + 1)
             .sum();

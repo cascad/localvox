@@ -58,8 +58,7 @@ impl SourceState {
             bits_per_sample: 16,
             sample_format: SampleFormat::Int,
         };
-        let mut writer = WavWriter::new(file, spec)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut writer = WavWriter::new(file, spec).map_err(std::io::Error::other)?;
         if let Some(data) = prepend_overlap {
             for chunk in data.chunks(2) {
                 if chunk.len() == 2 {
@@ -81,8 +80,7 @@ impl SourceState {
             self.writer.take(),
         ) {
             (Some(p), st, Some(mut w)) => {
-                w.flush()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                w.flush().map_err(std::io::Error::other)?;
                 drop(w);
                 let dur = self.duration_sec;
                 (p, st, dur)

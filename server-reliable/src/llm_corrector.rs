@@ -94,7 +94,7 @@ impl LlmCorrector {
     fn do_request(&self, prompt: &str, merged_text: &str) -> Option<String> {
         let is_thinking_model =
             self.model.contains("3.5") || self.model.to_lowercase().contains("deepseek");
-        let num_predict = merged_text.len().max(96).min(384);
+        let num_predict = merged_text.len().clamp(96, 384);
         let mut body = serde_json::json!({
             "model": self.model,
             "prompt": prompt,
@@ -240,8 +240,8 @@ fn strip_llm_reasoning(text: &str) -> String {
         if lower.starts_with(prefix) {
             if let Some(pos) = t.find(':') {
                 let after = t[pos + 1..].trim();
-                let after = after.trim_start_matches(|c: char| c == '"' || c == '«' || c == '"');
-                let after = after.trim_end_matches(|c: char| c == '"' || c == '»' || c == '"');
+                let after = after.trim_start_matches(['"', '«', '\u{201c}']);
+                let after = after.trim_end_matches(['"', '»', '\u{201d}']);
                 let after = after.trim();
                 if !after.is_empty() {
                     return after.to_string();
@@ -252,8 +252,8 @@ fn strip_llm_reasoning(text: &str) -> String {
 
     // Strip wrapping quotes: «текст» or "текст"
     let stripped = t
-        .trim_start_matches(|c: char| c == '«' || c == '"' || c == '"')
-        .trim_end_matches(|c: char| c == '»' || c == '"' || c == '"')
+        .trim_start_matches(['«', '"', '\u{201c}'])
+        .trim_end_matches(['»', '"', '\u{201d}'])
         .trim();
     if !stripped.is_empty() && stripped != t {
         return stripped.to_string();
