@@ -362,6 +362,7 @@ fn msg_to_json(msg: &processor::ClientMessage) -> String {
 }
 
 /// Main entry point for handling a client connection.
+#[allow(clippy::result_large_err)] // accept_hdr_async requires Err(Response<...>), not Box
 pub async fn handle_client(
     stream: ServerStream,
     settings: config::Settings,
