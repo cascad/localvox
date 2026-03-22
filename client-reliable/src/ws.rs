@@ -130,8 +130,7 @@ pub fn ws_io_thread(
             None
         };
 
-        let connect_result =
-            tungstenite::client_tls_with_config(builder, tcp, None, connector);
+        let connect_result = tungstenite::client_tls_with_config(builder, tcp, None, connector);
 
         let (mut ws, _) = match connect_result {
             Ok(x) => x,
@@ -227,7 +226,9 @@ pub fn ws_io_thread(
                 let _ = s.set_read_timeout(Some(Duration::from_millis(20)));
             }
             tungstenite::stream::MaybeTlsStream::NativeTls(s) => {
-                let _ = s.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
+                let _ = s
+                    .get_ref()
+                    .set_read_timeout(Some(Duration::from_millis(20)));
             }
             _ => {}
         }

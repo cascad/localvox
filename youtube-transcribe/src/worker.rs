@@ -147,7 +147,7 @@ async fn process_one(
 
     let mut request =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(server)
-        .map_err(|e| anyhow::anyhow!("invalid server URL: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("invalid server URL: {}", e))?;
     if let Some(key) = api_key.filter(|k| !k.is_empty()) {
         request
             .headers_mut()

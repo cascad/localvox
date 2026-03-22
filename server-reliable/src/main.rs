@@ -5,7 +5,6 @@ mod audio_writer;
 mod client_handler;
 mod config;
 mod dispatcher;
-mod tls;
 mod hallucination;
 mod llm_corrector;
 mod overlap;
@@ -13,6 +12,7 @@ mod processor;
 mod session;
 mod session_cleanup;
 mod session_registry;
+mod tls;
 mod transcript_postprocess;
 mod vad;
 
@@ -21,8 +21,8 @@ use clap::Parser;
 use config::sha2_hash_hex;
 use std::sync::Arc;
 use std::thread;
-use tokio_util::either::Either;
 use tokio::net::TcpListener;
+use tokio_util::either::Either;
 use tracing::info;
 
 fn generate_api_key() -> String {
@@ -150,7 +150,10 @@ async fn main() -> Result<()> {
         let name = args.key_name.as_deref().unwrap_or("default");
         let hash = sha2_hash_hex(&key);
         println!("Add this to settings.json api_keys:");
-        println!("  {{ \"name\": \"{}\", \"hash\": \"sha256:{}\" }}", name, hash);
+        println!(
+            "  {{ \"name\": \"{}\", \"hash\": \"sha256:{}\" }}",
+            name, hash
+        );
         println!("\nAPI key (give to client, store securely):");
         println!("{}", key);
         return Ok(());
@@ -223,7 +226,12 @@ async fn main() -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).await?;
     let scheme = if tls_acceptor.is_some() { "wss" } else { "ws" };
-    info!("Server {}://{} (auth: {})", scheme, addr, if settings.auth_enabled() { "on" } else { "off" });
+    info!(
+        "Server {}://{} (auth: {})",
+        scheme,
+        addr,
+        if settings.auth_enabled() { "on" } else { "off" }
+    );
 
     let cleanup_audio_dir = std::path::PathBuf::from(&settings.audio_dir);
     let cleanup_ttl = settings.session_ttl_hours;
