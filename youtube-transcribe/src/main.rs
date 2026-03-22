@@ -102,6 +102,10 @@ struct Cli {
     /// Сырой вывод: только сортировка по времени, без склейки (для отладки)
     #[arg(long)]
     raw: bool,
+
+    /// API key for server auth (or LOCALVOX_API_KEY env)
+    #[arg(long)]
+    api_key: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -155,11 +159,18 @@ fn main() -> Result<()> {
         s.save(&state_path)?;
     }
 
+    let api_key = cli
+        .api_key
+        .clone()
+        .or(settings.api_key.clone())
+        .or_else(|| std::env::var("LOCALVOX_API_KEY").ok());
+
     let worker_state = state.clone();
     let worker_path = state_path.clone();
     let worker_output_dir = output_dir.clone();
     let worker_server = server.clone();
     let raw_mode = cli.raw;
+    let worker_api_key = api_key.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(run_worker(
@@ -167,6 +178,7 @@ fn main() -> Result<()> {
             worker_path,
             worker_output_dir,
             worker_server,
+            worker_api_key,
             &yt_dlp,
             &ffmpeg,
             ffmpeg_location,

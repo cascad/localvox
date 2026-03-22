@@ -1,5 +1,7 @@
 {
-  "server": "ws://localhost:9745",
+  "server": "wss://localhost:9745",
+  "tls_ca_path": "certs/server.pem",
+  "tls_insecure": false,
   "device": "default",
   "loopback": "default-output",
   "output": "transcript.txt",

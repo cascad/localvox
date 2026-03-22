@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = "0.24"
 futures-util = "0.3"
 whisper-rs = { version = "0.13", features = ["raw-api"] }
 serde = { version = "1", features = ["derive"] }
@@ -33,3 +33,11 @@ ndarray = "0.17"
 ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
 ureq = { version = "2", features = ["json"] }
 uuid = { version = "1", features = ["v7"] }
+sha2 = "0.10"
+hex = "0.4"
+http = "1"
+rand = "0.8"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-util = { version = "0.7", features = ["io"] }

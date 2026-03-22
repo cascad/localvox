@@ -183,6 +183,9 @@ pub fn run_tui(
                                     summarize_model: cfg.summarize_model.clone(),
                                     summarize_prompt: cfg.summarize_prompt.clone(),
                                     client_id: cfg.client_id.clone(),
+                                    api_key: cfg.api_key.clone(),
+                                    tls_insecure: cfg.tls_insecure,
+                                    tls_ca_path: cfg.tls_ca_path.clone(),
                                 };
                                 let path = get_config_save_path();
                                 if let Ok(text) = serde_json::to_string_pretty(&save_cfg) {
@@ -537,8 +540,6 @@ pub fn run_tui(
                 UiEvent::AudioLevel { source: _, level } => audio_level2 = level,
                 UiEvent::Connected => {
                     connected = true;
-                    let ts = Local::now().format("%H:%M:%S");
-                    debug_lines.push(format!("{ts} [ws] подключено"));
                 }
                 UiEvent::Disconnected { reason } => {
                     connected = false;

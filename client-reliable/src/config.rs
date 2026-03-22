@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const DEFAULT_SUMMARIZE_PROMPT: &str = r#"Ты — суммаризатор встреч. Транскрипт ниже — запись разговора (mic = микрофон, sys = системный звук/удалённые участники).
 
@@ -56,9 +57,39 @@ pub struct ClientConfig {
     /// Промпт суммаризации. Плейсхолдер {text} — текст экспорта
     #[serde(default)]
     pub summarize_prompt: Option<String>,
-    /// Stable client/session ID for server reconnection.
+    /// Идентификатор сессии для переподключения к серверу. Пусто/нет поля + задан `api_key` → см. [`effective_client_id`].
     #[serde(default)]
     pub client_id: Option<String>,
+    /// API key for server auth (or env LOCALVOX_API_KEY).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Accept self-signed TLS certs (dev only).
+    #[serde(default)]
+    pub tls_insecure: Option<bool>,
+    /// Path to custom CA cert for TLS (PEM).
+    #[serde(default)]
+    pub tls_ca_path: Option<String>,
+}
+
+/// Эффективный `client_id` для WebSocket `config`: явное значение из конфига, иначе при непустом `api_key` — стабильный `k-` + 16 hex символов от SHA-256 ключа.
+///
+/// Если оба устройства используют **один** API key, задайте им **разные** `client_id` вручную, иначе сессии на сервере конфликтуют.
+pub fn effective_client_id(configured: Option<String>, api_key: Option<&str>) -> Option<String> {
+    let configured = configured.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    });
+    if let Some(id) = configured {
+        return Some(id);
+    }
+    let key = api_key.map(str::trim).filter(|k| !k.is_empty())?;
+    let hash = Sha256::digest(key.as_bytes());
+    let hex = hex::encode(hash);
+    Some(format!("k-{}", &hex[..16]))
 }
 
 pub fn find_config_path() -> Option<PathBuf> {
@@ -96,6 +127,10 @@ pub fn default_config() -> ClientConfig {
         summarize_model: Some("qwen3.5:9b".into()),
         summarize_prompt: Some(DEFAULT_SUMMARIZE_PROMPT.into()),
         client_id: Some("live".into()),
+        api_key: None,
+        tls_insecure: None,
+        // Self-signed из tools/gen-dev-certs.* — путь от cwd или абсолютный.
+        tls_ca_path: Some("certs/server.pem".into()),
     }
 }
 
@@ -152,4 +187,35 @@ pub fn get_config_save_path() -> PathBuf {
         return dir.join(name);
     }
     PathBuf::from(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_client_id;
+
+    #[test]
+    fn effective_client_id_prefers_configured() {
+        assert_eq!(
+            effective_client_id(Some("  my-id  ".into()), Some("secret")),
+            Some("my-id".into())
+        );
+    }
+
+    #[test]
+    fn effective_client_id_derives_from_api_key() {
+        assert_eq!(
+            effective_client_id(None, Some("secret")),
+            Some("k-2bb80d537b1da3e3".into())
+        );
+        assert_eq!(
+            effective_client_id(Some("".into()), Some("secret")),
+            Some("k-2bb80d537b1da3e3".into())
+        );
+    }
+
+    #[test]
+    fn effective_client_id_none_without_key() {
+        assert_eq!(effective_client_id(None, None), None);
+        assert_eq!(effective_client_id(None, Some("")), None);
+    }
 }

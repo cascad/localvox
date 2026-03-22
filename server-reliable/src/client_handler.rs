@@ -3,6 +3,8 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::path::Path;
+use tokio_util::either::Either;
+use tokio_rustls::server::TlsStream;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
@@ -16,12 +18,17 @@ use crate::processor;
 use crate::session;
 use crate::session_registry;
 
+type ServerStream = Either<
+    tokio::net::TcpStream,
+    TlsStream<tokio::net::TcpStream>,
+>;
+
 pub type WsSender = futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    tokio_tungstenite::WebSocketStream<ServerStream>,
     tokio_tungstenite::tungstenite::Message,
 >;
 pub type WsReceiver =
-    futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>;
+    futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<ServerStream>>;
 
 fn scan_session_lag(
     session_dir: &Path,
@@ -359,14 +366,38 @@ fn msg_to_json(msg: &processor::ClientMessage) -> String {
 
 /// Main entry point for handling a client connection.
 pub async fn handle_client(
-    stream: tokio::net::TcpStream,
+    stream: ServerStream,
     settings: config::Settings,
     audio_dir: std::path::PathBuf,
     asr_dispatcher: Arc<dispatcher::AsrDispatcher>,
     registry: Arc<session_registry::SessionRegistry>,
     _conn_id: u32,
 ) -> Result<()> {
-    let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+    let settings_ref = &settings;
+    let ws_stream = tokio_tungstenite::accept_hdr_async(
+        stream,
+        |req: &http::Request<()>, mut res: http::Response<()>| {
+        if settings_ref.auth_enabled() {
+            let key = req
+                .headers()
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer ").map(|s| s.trim()))
+                .filter(|s| !s.is_empty());
+            if let Some(k) = key {
+                if settings_ref.validate_api_key(k).is_some() {
+                    return Ok(res);
+                }
+            }
+            tracing::warn!("Auth rejected: missing or invalid API key");
+            *res.status_mut() = http::StatusCode::UNAUTHORIZED;
+            Err(res.map(|()| Some("Unauthorized".to_string())))
+        } else {
+            Ok(res)
+        }
+        },
+    )
+    .await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     // --- Parse first message (config or data) ---

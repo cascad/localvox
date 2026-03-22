@@ -1,5 +1,8 @@
 {
-  "use_gpu": false,
+  "tls_cert_path": "",
+  "tls_key_path": "",
+  "api_keys": [],
+  "use_gpu": true,
   "language": "ru",
   "whisper_no_speech_thold": 0.6,
   "audio_dir": "/app/audio",
@@ -17,8 +20,15 @@
   "session_ttl_hours": 24,
   "audio_dir_max_mb": 4096,
   "models": [
-    { "type": "whisper", "model_path": "/models/whisper/ggml-large-v3-turbo.bin", "use_gpu": false },
-    { "type": "gigaam", "model_path": "/models/gigaam", "use_gpu": false }
-  ],
-  "_parakeet_example": "Добавить в models: { \"type\": \"parakeet\", \"model_path\": \"/models/parakeet\", \"use_gpu\": false }"
+    {
+      "type": "whisper",
+      "model_path": "/models/whisper/ggml-large-v3-turbo.bin",
+      "use_gpu": true
+    },
+    {
+      "type": "gigaam",
+      "model_path": "/models/gigaam",
+      "use_gpu": true
+    }
+  ]
 }

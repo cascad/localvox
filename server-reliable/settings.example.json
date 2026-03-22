@@ -1,4 +1,7 @@
 {
+  "tls_cert_path": "",
+  "tls_key_path": "",
+  "api_keys": [],
   "use_gpu": true,
   "cuda_path": "",
   "language": "ru",

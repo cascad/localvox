@@ -65,6 +65,7 @@ pub async fn run_worker(
     state_path: PathBuf,
     _output_dir: PathBuf,
     server: String,
+    api_key: Option<String>,
     yt_dlp: &str,
     ffmpeg: &str,
     ffmpeg_location: Option<String>,
@@ -100,6 +101,7 @@ pub async fn run_worker(
             &out_path,
             &session_id,
             &server,
+            api_key.as_deref(),
             yt_dlp,
             ffmpeg,
             ffmpeg_location.as_deref(),
@@ -129,6 +131,7 @@ async fn process_one(
     output_path: &PathBuf,
     session_id: &str,
     server: &str,
+    api_key: Option<&str>,
     yt_dlp: &str,
     ffmpeg: &str,
     ffmpeg_location: Option<&str>,
@@ -142,7 +145,15 @@ async fn process_one(
     let pcm = convert_to_pcm(ffmpeg, &temp)?;
     let _ = std::fs::remove_file(&temp);
 
-    let (ws_stream, _) = connect_async(server).await.context("connect to server")?;
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(server)
+        .map_err(|e| anyhow::anyhow!("invalid server URL: {}", e))?;
+    if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+        request
+            .headers_mut()
+            .insert("Authorization", format!("Bearer {key}").parse().unwrap());
+    }
+    let (ws_stream, _) = connect_async(request).await.context("connect to server")?;
     let (mut write, mut read) = ws_stream.split();
 
     write

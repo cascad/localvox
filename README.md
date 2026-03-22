@@ -26,6 +26,10 @@ chmod +x tools/setup.sh
 cargo run -p live-transcribe-client-reliable
 ```
 
+**WSS и доверие к серверу** (без `tls_insecure` в бою): см. [docs/tls-trust.md](docs/tls-trust.md).
+
+**`client_id`:** если поле пустое, но задан API key, клиент сам выставит стабильный id от ключа (`k-` + hex); при общем ключе на нескольких клиентах задайте разные `client_id` вручную — см. [client-reliable/README.md](client-reliable/README.md).
+
 ---
 
 ## Подробнее
@@ -36,6 +40,10 @@ cargo run -p live-transcribe-client-reliable
 - **Клиент** — TUI (ratatui), захватывает микрофон и/или системный звук, отправляет на сервер, отображает транскрипцию
 
 ### Развёртывание сервера (Docker)
+
+**Конфиг Docker:** в репозитории лежит шаблон `server-reliable/settings.docker.example.json`. Скопируйте его в `server-reliable/settings.docker.json` (этот файл в `.gitignore`, в индекс не попадает) и задайте `api_keys`, при необходимости пути TLS и т.д. Образы собираются с дефолтом из **example**; при `docker compose` ваш `settings.docker.json` монтируется поверх `/app/settings.json`.
+
+Для **CPU-only** (`docker build -f Dockerfile.cpu …`) отдельного JSON не нужно: в том же `settings.docker.json` выставьте `"use_gpu": false` и в каждом элементе `models` — `"use_gpu": false`.
 
 `tools/setup.sh` делает всё за вас:
 1. Устанавливает nvidia-container-toolkit (Ubuntu/Debian) — пропуск: `SKIP_NVIDIA_TOOLKIT=1`

@@ -11,8 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 cpal = "0.17"
-tungstenite = "0.24"
+tungstenite = { version = "0.24", features = ["native-tls"] }
 url = "2"
+http = "1"
+native-tls = "0.2"
 ratatui = "0.29"
 crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
@@ -22,6 +24,8 @@ anyhow = "1"
 chrono = "0.4"
 ctrlc = "3"
 ureq = { version = "2", default-features = false, features = ["json"] }
+sha2 = "0.10"
+hex = "0.4"
 
 # Windows: WASAPI для loopback (захват системного звука)
 [target.'cfg(windows)'.dependencies]

@@ -22,6 +22,9 @@ pub fn ws_io_thread(
     client_id: Option<String>,
     pending_end_session: Arc<AtomicBool>,
     initial_recording: bool,
+    api_key: Option<String>,
+    tls_insecure: bool,
+    tls_ca_path: Option<String>,
 ) {
     let last_seq = AtomicU64::new(0);
     let reconnect_delay = Duration::from_secs(2);
@@ -54,6 +57,23 @@ pub fn ws_io_thread(
             .parse()
             .unwrap_or_else(|_| panic!("не удалось распарсить адрес сервера «{addr}»"));
 
+        let uri: http::Uri = match server_url.parse() {
+            Ok(u) => u,
+            Err(e) => {
+                let _ = ui_tx.send(UiEvent::Disconnected {
+                    reason: format!("некорректный URI: {e}"),
+                });
+                return;
+            }
+        };
+
+        let mut builder = tungstenite::client::ClientRequestBuilder::new(uri.clone());
+        if let Some(ref key) = api_key {
+            if !key.is_empty() {
+                builder = builder.with_header("Authorization", format!("Bearer {key}"));
+            }
+        }
+
         let tcp = match std::net::TcpStream::connect_timeout(&sock_addr, Duration::from_secs(5)) {
             Ok(s) => s,
             Err(e) => {
@@ -69,7 +89,51 @@ pub fn ws_io_thread(
                 continue;
             }
         };
-        let (mut ws, _) = match tungstenite::client::client_with_config(&server_url, tcp, None) {
+
+        let connector = if server_url.starts_with("wss://") {
+            let mut tls_builder = native_tls::TlsConnector::builder();
+            if tls_insecure {
+                tls_builder.danger_accept_invalid_certs(true);
+            }
+            if let Some(ref ca_path) = tls_ca_path {
+                match std::fs::read(ca_path) {
+                    Ok(pem) => match native_tls::Certificate::from_pem(&pem) {
+                        Ok(cert) => {
+                            tls_builder.add_root_certificate(cert);
+                        }
+                        Err(e) => {
+                            let _ = ui_tx.send(UiEvent::Disconnected {
+                                reason: format!("TLS CA cert parse: {e}"),
+                            });
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = ui_tx.send(UiEvent::Disconnected {
+                            reason: format!("TLS CA read {ca_path}: {e}"),
+                        });
+                        continue;
+                    }
+                }
+            }
+            let c = match tls_builder.build() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = ui_tx.send(UiEvent::Disconnected {
+                        reason: format!("TLS connector: {e}"),
+                    });
+                    continue;
+                }
+            };
+            Some(tungstenite::Connector::NativeTls(c))
+        } else {
+            None
+        };
+
+        let connect_result =
+            tungstenite::client_tls_with_config(builder, tcp, None, connector);
+
+        let (mut ws, _) = match connect_result {
             Ok(x) => x,
             Err(e) => {
                 let _ = ui_tx.send(UiEvent::Disconnected {
@@ -119,11 +183,54 @@ pub fn ws_io_thread(
             continue;
         }
 
+        let client_id_note = client_id
+            .as_deref()
+            .map(|c| format!("client_id={c}"))
+            .unwrap_or_else(|| "client_id=(none)".into());
+        let transport = if server_url.starts_with("wss://") {
+            match ws.get_ref() {
+                tungstenite::stream::MaybeTlsStream::NativeTls(tls) => {
+                    let verify = if tls_insecure {
+                        "server cert verification OFF (insecure)"
+                    } else if tls_ca_path.is_some() {
+                        "server cert verified (custom CA / pinned PEM)"
+                    } else {
+                        "server cert verified (system trust store)"
+                    };
+                    let peer_cert = tls
+                        .peer_certificate()
+                        .ok()
+                        .flatten()
+                        .and_then(|c| c.to_der().ok())
+                        .map(|der| format!("peer leaf cert {} bytes DER", der.len()))
+                        .unwrap_or_else(|| "peer cert n/a".into());
+                    format!(
+                        "[ws] WSS: encrypted; {verify}; {peer_cert}; {client_id_note} (TLS version/cipher — в логе сервера)"
+                    )
+                }
+                tungstenite::stream::MaybeTlsStream::Plain(_) => {
+                    format!("[ws] WSS URL but stream is plain TCP (unexpected); {client_id_note}")
+                }
+                _ => format!("[ws] WSS: unknown TLS stream type; {client_id_note}"),
+            }
+        } else {
+            format!(
+                "[ws] WS: plaintext (no TLS); {client_id_note} — для шифрования используйте wss://"
+            )
+        };
+        let _ = ui_tx.send(UiEvent::Debug { text: transport });
+
         let _ = ui_tx.send(UiEvent::Connected);
 
-        let _ = ws
-            .get_ref()
-            .set_read_timeout(Some(Duration::from_millis(20)));
+        match ws.get_ref() {
+            tungstenite::stream::MaybeTlsStream::Plain(s) => {
+                let _ = s.set_read_timeout(Some(Duration::from_millis(20)));
+            }
+            tungstenite::stream::MaybeTlsStream::NativeTls(s) => {
+                let _ = s.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
+            }
+            _ => {}
+        }
 
         let mut write_errors = 0u32;
         let mut disconnected = false;

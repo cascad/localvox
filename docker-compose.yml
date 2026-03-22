@@ -1,6 +1,10 @@
 # LocalVox — WebSocket-сервер транскрипции (Rust + Whisper + GigaAM)
 # Модели и GPU прокидываются с хоста. Ollama — на хосте (host.docker.internal:11434).
 #
+# Конфиг: скопируйте server-reliable/settings.docker.example.json → settings.docker.json
+# и правьте локально (api_keys, TLS, use_gpu). Файл settings.docker.json в git не входит.
+# CPU-only образ (Dockerfile.cpu): те же настройки, выставьте use_gpu: false и в models[].
+#
 # Быстрый старт: ./tools/setup.sh
 #
 # Образы: localvox (GPU), localvox-cpu (без видеокарты)
@@ -32,6 +36,8 @@ services:
       # - "${PARAKEET_MODELS_HOST:-./models/parakeet-tdt-0.6b-v3-int8}:/models/parakeet:ro"
       - "localvox-audio:/app/audio"
       - "./server-reliable/settings.docker.json:/app/settings.json:ro"
+      # TLS (раскомментировать при wss://): добавить tls_cert_path, tls_key_path в settings
+      - "./certs:/app/certs:ro"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
     # host.docker.internal для доступа к Ollama на хосте (Linux: нужен Docker 20.10+)

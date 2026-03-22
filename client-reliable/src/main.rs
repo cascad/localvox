@@ -10,7 +10,7 @@ pub use audio::{
     list_output_device_names, loopback_capture, physical_key, resample, resolve_device, to_mono,
     SAMPLE_RATE,
 };
-pub use config::{get_config_save_path, load_config, ClientConfig};
+pub use config::{effective_client_id, get_config_save_path, load_config, ClientConfig};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -65,6 +65,14 @@ struct Cli {
     /// Путь к конфигу (по умолчанию ищет client-config.json)
     #[arg(short, long)]
     config: Option<String>,
+
+    /// API key for server auth (or LOCALVOX_API_KEY env)
+    #[arg(long)]
+    api_key: Option<String>,
+
+    /// Accept self-signed TLS certs (dev only)
+    #[arg(long)]
+    tls_insecure: bool,
 }
 
 fn list_devices() {
@@ -260,9 +268,16 @@ fn main() -> Result<()> {
         let ui_tx_ws = ui_tx.clone();
         let running_ws = running.clone();
         let src_count = if has_source2 { 2 } else { 1 };
-        let client_id = cfg.client_id.clone();
         let pending_end_session = std::sync::Arc::new(AtomicBool::new(false));
         let pending_end_session_ws = pending_end_session.clone();
+        let api_key = cli
+            .api_key
+            .clone()
+            .or(cfg.api_key.clone())
+            .or_else(|| std::env::var("LOCALVOX_API_KEY").ok());
+        let client_id = effective_client_id(cfg.client_id.clone(), api_key.as_deref());
+        let tls_insecure = cli.tls_insecure || cfg.tls_insecure.unwrap_or(false);
+        let tls_ca_path = cfg.tls_ca_path.clone();
         let ws_thread = thread::spawn(move || {
             ws_io_thread(
                 ws_url,
@@ -273,6 +288,9 @@ fn main() -> Result<()> {
                 client_id,
                 pending_end_session_ws,
                 recording,
+                api_key,
+                tls_insecure,
+                tls_ca_path,
             );
         });
 

@@ -1,6 +1,14 @@
 //! Load settings from settings.json.
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
+
+/// Hash a string with SHA-256 and return hex.
+pub fn sha2_hash_hex(s: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    hex::encode(hasher.finalize())
+}
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -89,6 +97,23 @@ pub struct Settings {
     /// Whisper no_speech_thold (0..1). Ниже = чувствительнее к тихому микрофону. Default 0.4.
     #[serde(default = "default_whisper_no_speech_thold")]
     pub whisper_no_speech_thold: f32,
+    /// Path to TLS certificate (PEM). If set with tls_key_path, enables WSS.
+    #[serde(default)]
+    pub tls_cert_path: Option<String>,
+    /// Path to TLS private key (PEM). Required for TLS.
+    #[serde(default)]
+    pub tls_key_path: Option<String>,
+    /// API keys for auth. Each entry: { "name": "...", "hash": "sha256:hex" }. Empty = auth disabled.
+    #[serde(default)]
+    pub api_keys: Vec<ApiKeyEntry>,
+}
+
+/// API key entry in settings (hash stored, not the key itself).
+#[derive(Clone, Debug, Deserialize)]
+pub struct ApiKeyEntry {
+    pub name: String,
+    /// SHA-256 hash as hex, with optional "sha256:" prefix.
+    pub hash: String,
 }
 
 fn default_ensemble_enabled() -> bool {
@@ -198,11 +223,34 @@ impl Default for Settings {
             session_ttl_hours: default_session_ttl_hours(),
             audio_dir_max_mb: default_audio_dir_max_mb(),
             whisper_no_speech_thold: default_whisper_no_speech_thold(),
+            tls_cert_path: None,
+            tls_key_path: None,
+            api_keys: Vec::new(),
         }
     }
 }
 
 impl Settings {
+    /// Check if API key auth is enabled (any keys configured).
+    pub fn auth_enabled(&self) -> bool {
+        !self.api_keys.is_empty()
+    }
+
+    /// Validate API key, return Some(name) if valid.
+    pub fn validate_api_key(&self, key: &str) -> Option<&str> {
+        if self.api_keys.is_empty() {
+            return Some("anonymous");
+        }
+        let key_hash = sha2_hash_hex(key);
+        for entry in &self.api_keys {
+            let stored = entry.hash.strip_prefix("sha256:").unwrap_or(&entry.hash);
+            if stored.eq_ignore_ascii_case(&key_hash) {
+                return Some(&entry.name);
+            }
+        }
+        None
+    }
+
     /// Returns the effective list of models to load. If `models` array is present, uses it.
     /// Otherwise synthesizes from legacy fields: model_path -> whisper, ensemble_enabled + gigaam_model_dir -> gigaam.
     pub fn resolved_models(&self) -> Vec<ModelEntry> {

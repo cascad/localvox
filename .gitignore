@@ -3,7 +3,9 @@
 
 # Config (user-specific paths)
 server-reliable/settings.json
+server-reliable/settings.docker.json
 client-config.json
+certs/
 .env
 
 # Models (downloaded separately)

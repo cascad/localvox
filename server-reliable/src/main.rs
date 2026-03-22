@@ -5,6 +5,7 @@ mod audio_writer;
 mod client_handler;
 mod config;
 mod dispatcher;
+mod tls;
 mod hallucination;
 mod llm_corrector;
 mod overlap;
@@ -17,10 +18,18 @@ mod vad;
 
 use anyhow::Result;
 use clap::Parser;
+use config::sha2_hash_hex;
 use std::sync::Arc;
 use std::thread;
+use tokio_util::either::Either;
 use tokio::net::TcpListener;
 use tracing::info;
+
+fn generate_api_key() -> String {
+    let mut bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+    hex::encode(bytes)
+}
 
 /// Prepend cuda_path (folder with cublas64_12.dll etc.) to PATH so whisper.cpp finds CUDA DLLs.
 fn add_cuda_to_path(settings: &config::Settings) {
@@ -110,6 +119,14 @@ struct Args {
     /// Path to GGML Whisper model (.bin)
     #[arg(long)]
     model: Option<String>,
+
+    /// Generate a new API key and print it (for adding to settings.json api_keys)
+    #[arg(long)]
+    generate_key: bool,
+
+    /// Optional name for the generated key
+    #[arg(long, requires = "generate_key")]
+    key_name: Option<String>,
 }
 
 #[tokio::main]
@@ -122,7 +139,23 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let args = Args::parse();
+
+    if args.generate_key {
+        let key = generate_api_key();
+        let name = args.key_name.as_deref().unwrap_or("default");
+        let hash = sha2_hash_hex(&key);
+        println!("Add this to settings.json api_keys:");
+        println!("  {{ \"name\": \"{}\", \"hash\": \"sha256:{}\" }}", name, hash);
+        println!("\nAPI key (give to client, store securely):");
+        println!("{}", key);
+        return Ok(());
+    }
+
     let settings = config::load_settings(args.model.as_deref())?;
 
     add_cuda_to_path(&settings);
@@ -176,9 +209,19 @@ async fn main() -> Result<()> {
     ));
     info!("ASR dispatcher: {} workers (global)", settings.asr_workers);
 
+    let tls_acceptor = match (&settings.tls_cert_path, &settings.tls_key_path) {
+        (Some(cert), Some(key)) if !cert.is_empty() && !key.is_empty() => {
+            let cert_path = std::path::Path::new(cert);
+            let key_path = std::path::Path::new(key);
+            Some(tls::load_tls_acceptor(cert_path, key_path)?)
+        }
+        _ => None,
+    };
+
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).await?;
-    info!("Server ws://{}", addr);
+    let scheme = if tls_acceptor.is_some() { "wss" } else { "ws" };
+    info!("Server {}://{} (auth: {})", scheme, addr, if settings.auth_enabled() { "on" } else { "off" });
 
     let cleanup_audio_dir = std::path::PathBuf::from(&settings.audio_dir);
     let cleanup_ttl = settings.session_ttl_hours;
@@ -223,7 +266,45 @@ async fn main() -> Result<()> {
         let (stream, peer) = listener.accept().await?;
         session_counter += 1;
         let sid = session_counter;
-        info!("Client connected: {} (conn {})", peer, sid);
+
+        let stream = if let Some(ref acceptor) = tls_acceptor {
+            match acceptor.accept(stream).await {
+                Ok(tls_stream) => {
+                    let rustls_conn = tls_stream.get_ref().1;
+                    let tls_ver = rustls_conn
+                        .protocol_version()
+                        .map(|v| format!("{v:?}"))
+                        .unwrap_or_else(|| "unknown".into());
+                    let cipher = rustls_conn
+                        .negotiated_cipher_suite()
+                        .map(|cs| format!("{:?}", cs.suite()))
+                        .unwrap_or_else(|| "n/a".into());
+                    info!(
+                        "Client connected: {} (conn {}, transport: WSS, TLS {}, cipher {})",
+                        peer, sid, tls_ver, cipher
+                    );
+                    tracing::debug!(
+                        target: "localvox::tls",
+                        conn = sid,
+                        peer = %peer,
+                        tls_version = %tls_ver,
+                        cipher_suite = %cipher,
+                        "TLS handshake completed"
+                    );
+                    Either::Right(tls_stream)
+                }
+                Err(e) => {
+                    tracing::error!("[conn {}] TLS handshake failed: {}", sid, e);
+                    continue;
+                }
+            }
+        } else {
+            info!(
+                "Client connected: {} (conn {}, transport: plain WS, TLS disabled)",
+                peer, sid
+            );
+            Either::Left(stream)
+        };
 
         let settings = settings.clone();
         let audio_dir = std::path::PathBuf::from(&settings.audio_dir);

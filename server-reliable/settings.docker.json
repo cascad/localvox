@@ -1,4 +1,20 @@
 {
+  "tls_cert_path": "/app/certs/server.pem",
+  "tls_key_path": "/app/certs/server.key",
+  "api_keys": [
+    {
+      "name": "live",
+      "hash": "sha256:40404eb6bf18397da4b0fd23fd8d81fa40b03a9a9e18c70f482b0200db1ffe7e"
+    },
+    {
+      "name": "live-mac",
+      "hash": "sha256:0838bc915e458b0d1d098236273677cc0d6d027ea2808628bff6df66baecd523"
+    },
+    {
+      "name": "ivan-simple",
+      "hash": "sha256:df1d2418bf23f4e69530d7c23e0b6d010fb4162096f5bd1aac62622cae42268a"
+    }
+  ],
   "use_gpu": true,
   "language": "ru",
   "whisper_no_speech_thold": 0.6,
@@ -17,8 +33,16 @@
   "session_ttl_hours": 24,
   "audio_dir_max_mb": 4096,
   "models": [
-    { "type": "whisper", "model_path": "/models/whisper/ggml-large-v3-turbo.bin", "use_gpu": true },
-    { "type": "gigaam", "model_path": "/models/gigaam", "use_gpu": true }
+    {
+      "type": "whisper",
+      "model_path": "/models/whisper/ggml-large-v3-turbo.bin",
+      "use_gpu": true
+    },
+    {
+      "type": "gigaam",
+      "model_path": "/models/gigaam",
+      "use_gpu": true
+    }
   ],
   "_parakeet_example": "Раскомментировать volume в docker-compose.yml и добавить в models: { \"type\": \"parakeet\", \"model_path\": \"/models/parakeet\", \"use_gpu\": true }"
 }

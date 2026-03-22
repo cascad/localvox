@@ -19,6 +19,9 @@ pub struct Settings {
     pub js_runtime_path: Option<String>,
     #[serde(default = "default_server")]
     pub server: String,
+    /// API key for server auth (or env LOCALVOX_API_KEY).
+    #[serde(default)]
+    pub api_key: Option<String>,
     #[serde(default = "default_output_dir")]
     pub output_dir: String,
     #[serde(default)]
@@ -40,6 +43,7 @@ impl Default for Settings {
             js_runtime: None,
             js_runtime_path: None,
             server: default_server(),
+            api_key: None,
             output_dir: default_output_dir(),
             state_file: None,
         }
