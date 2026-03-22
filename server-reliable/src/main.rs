@@ -181,6 +181,8 @@ async fn main() -> Result<()> {
         info!("  {:<name_w$} | {}", m.name(), m.backend(), name_w = name_w);
     }
 
+    asr::warmup(&models);
+
     let llm_dispatcher: Option<Arc<dispatcher::LlmDispatcher>> = if settings.llm_correction_enabled
     {
         info!(
