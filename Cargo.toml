@@ -1,3 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["client-reliable", "server-reliable", "youtube-transcribe"]
+members = [
+    "client-reliable",
+    "server-reliable",
+    "youtube-transcribe",
+    "wss-probe",
+]

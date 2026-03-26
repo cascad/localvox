@@ -26,7 +26,11 @@ chmod +x tools/setup.sh
 cargo run -p live-transcribe-client-reliable
 ```
 
-**WSS и доверие к серверу** (без `tls_insecure` в бою): см. [docs/tls-trust.md](docs/tls-trust.md).
+**WSS и доверие к серверу** (без `tls_insecure` в бою): см. [docs/tls-trust.md](docs/tls-trust.md). Примеры выпуска dev-сертификата (несколько IP в SAN): [tools/README.md](tools/README.md).
+
+**Доступ из интернета при CGNAT** (ngrok TCP + Docker): [docs/ngrok-tunnel.md](docs/ngrok-tunnel.md).
+
+Проверка **только** WSS/WebSocket до сервера (TLS + handshake + вывод кадров): `cargo run -p wss-probe -- wss://HOST:PORT --tls-ca-path certs/server.pem` — см. [wss-probe/README.md](wss-probe/README.md).
 
 **`client_id`:** если поле пустое, но задан API key, клиент сам выставит стабильный id от ключа (`k-` + hex); при общем ключе на нескольких клиентах задайте разные `client_id` вручную — см. [client-reliable/README.md](client-reliable/README.md).
 
@@ -134,3 +138,5 @@ python tools/bench_sova.py --dataset hf:bond005/sova_rudevices --split test --li
 ```
 
 Другие источники: `--dataset local:./folder` (manifest.jsonl) или `--dataset dir:./wavs` (.wav + .txt).
+
+.\tools\gen-dev-certs.ps1 -OutDir .\certs -ExtraIp 192.168.1.86 -ExtraDns 6.tcp.eu.ngrok.io

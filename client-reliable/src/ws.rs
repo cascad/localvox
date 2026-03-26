@@ -1,6 +1,7 @@
 //! WebSocket I/O thread: connect, config, message loop.
 
 use std::io;
+use std::net::ToSocketAddrs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -48,14 +49,27 @@ pub fn ws_io_thread(
         } else {
             host
         };
-        let port = parsed_url
-            .port()
-            .expect("URL сервера должен содержать порт");
-        let addr = format!("{}:{}", host, port);
+        let port = parsed_url.port_or_known_default().expect(
+            "URL сервера: укажите ws:// или wss:// (порт по умолчанию: 80 / 443)",
+        );
 
-        let sock_addr: std::net::SocketAddr = addr
-            .parse()
-            .unwrap_or_else(|_| panic!("не удалось распарсить адрес сервера «{addr}»"));
+        let sock_addr = match (host, port).to_socket_addrs().and_then(|mut i| i.next().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "нет адресов после DNS")
+        })) {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = ui_tx.send(UiEvent::Disconnected {
+                    reason: format!("DNS {host}:{port}: {e}"),
+                });
+                for _ in 0..20 {
+                    if !running.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                }
+                continue;
+            }
+        };
 
         let uri: http::Uri = match server_url.parse() {
             Ok(u) => u,

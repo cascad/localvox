@@ -1,0 +1,19 @@
+[package]
+name = "wss-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal WSS connectivity probe for LocalVox server (TLS + WS handshake + read frames)"
+default-run = "wss-probe"
+
+[[bin]]
+name = "wss-probe"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+http = "1"
+native-tls = "0.2"
+serde_json = "1"
+tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2"
